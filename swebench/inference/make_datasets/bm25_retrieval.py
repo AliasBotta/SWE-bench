@@ -185,7 +185,7 @@ def build_documents(repo_dir, commit, document_encoding_func):
     """
     documents = dict()
     with ContextManager(repo_dir, commit):
-        filenames = list_files(repo_dir, include_tests=False)
+        filenames = list_files(repo_dir, include_tests=True)
         for relative_path in filenames:
             filename = os.path.join(repo_dir, relative_path)
             text = document_encoding_func(filename, relative_path)

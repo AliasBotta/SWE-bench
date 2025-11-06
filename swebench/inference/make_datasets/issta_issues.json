@@ -1,0 +1,47 @@
+[
+  {
+    "issue_url": "https://github.com/nokiatech/heif/issues/88",
+    "first_bfc": "b26a7086cb3eba61872f44c7902c54417f1084d5",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/libxsmm/libxsmm/issues/401",
+    "first_bfc": "d6984918886d4bd6be241ff3e6af799f4aba3375",
+    "last_bfc": "c24027d07eef23411a56958e52afad5ee6db6393"
+  },
+  {
+    "issue_url": "https://github.com/libxsmm/libxsmm/issues/400",
+    "first_bfc": "d6984918886d4bd6be241ff3e6af799f4aba3375",
+    "last_bfc": "c24027d07eef23411a56958e52afad5ee6db6393"
+  },
+  {
+    "issue_url": "https://github.com/libxsmm/libxsmm/issues/399",
+    "first_bfc": "d6984918886d4bd6be241ff3e6af799f4aba3375",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/json-c/json-c/issues/654",
+    "first_bfc": "4e9e44e5258dee7654f74948b0dd5da39c28beec",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/gpac/gpac/issues/1571",
+    "first_bfc": "7dfb4d351fbc7c800291c4b4db052e053478df12",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/gpac/gpac/issues/1570",
+    "first_bfc": "8e05648d6b4459facbc783025c5c42d301fef5c3",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/LibreDWG/libredwg/issues/265",
+    "first_bfc": "eb6b599589e9cae67080814543c2532e8530b0b7",
+    "last_bfc": null
+  },
+  {
+    "issue_url": "https://github.com/LibreDWG/libredwg/issues/262",
+    "first_bfc": "66a3484bda00ff5af2bdb79e41db3b066fdd0d00",
+    "last_bfc": ""
+  }
+]

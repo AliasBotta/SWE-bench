@@ -1,0 +1,3069 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+A Segmentation fault in bits.c:186
+
+## System info
+
+Ubuntu X64, gcc (Ubuntu 5.5.0-12ubuntu1), dwg2dxf (latest master [bacd017](https://github.com/LibreDWG/libredwg/commit/bacd01778d20b7b79f28541ea7a60cafe25175aa))
+## Configure
+
+CFLAGS="-g -fsanitize=address" LDFLAGS="-fsanitize=address" ./configure
+
+## Command line
+
+./programs/dwg2dxf -b -m ./SEGV-bit_read_BB-bits-186 -o /dev/null
+
+## Output
+
+```
+Segmentation fault (core dumped)
+```
+
+## AddressSanitizer output
+
+```
+ASAN:SIGSEGV
+=================================================================
+==33413==ERROR: AddressSanitizer: SEGV on unknown address 0x63001eedeec1 (pc 0x56001ae1aa1c bp 0x7ffc0f008820 sp 0x7ffc0f008570 T0)
+    #0 0x56001ae1aa1b in bit_read_BB /home/seviezhou/libredwg/src/bits.c:186
+    #1 0x56001ae3d11b in bit_read_BS /home/seviezhou/libredwg/src/bits.c:525
+    #2 0x56001ae3d11b in bit_read_TU /home/seviezhou/libredwg/src/bits.c:1891
+    #3 0x56001ae4d52b in bit_read_CMC /home/seviezhou/libredwg/src/bits.c:2610
+    #4 0x56001a5261c2 in dwg_decode_VIEWPORT_private /home/seviezhou/libredwg/src/dwg.spec:1674
+    #5 0x56001aef02ff in dwg_decode_VIEWPORT /home/seviezhou/libredwg/src/dwg.spec:1607
+    #6 0x56001aef02ff in dwg_decode_add_object /home/seviezhou/libredwg/src/decode.c:5583
+    #7 0x56001aef77b8 in read_2004_section_handles /home/seviezhou/libredwg/src/decode.c:2843
+    #8 0x56001aef77b8 in decode_R2004 /home/seviezhou/libredwg/src/decode.c:3682
+    #9 0x56001af060ba in dwg_decode /home/seviezhou/libredwg/src/decode.c:242
+    #10 0x56001adfcd94 in dwg_read_file /home/seviezhou/libredwg/src/dwg.c:251
+    #11 0x56001adfa242 in main /home/seviezhou/libredwg/programs/dwg2dxf.c:258
+    #12 0x7f13152a8b96 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x21b96)
+    #13 0x56001adfb2b9 in _start (/home/seviezhou/libredwg/programs/dwg2dxf+0xa8d2b9)
+
+AddressSanitizer can not provide additional info.
+SUMMARY: AddressSanitizer: SEGV /home/seviezhou/libredwg/src/bits.c:186 bit_read_BB
+==33413==ABORTING
+```
+
+## POC
+
+[SEGV-bit_read_BB-bits-186.zip](https://github.com/LibreDWG/libredwg/files/5016490/SEGV-bit_read_BB-bits-186.zip)
+</issue>
+
+<code>
+[start of programs/geom.c]\nprograms/geom.c
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2019 Free Software Foundation, Inc.                        */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * geom.c: geometric projections from OCS
+ * Note: There are certainly bugs lurking here. Not thoroughly tested yet.
+ * written by Reini Urban
+*/
+
+#include "../src/config.h"
+#include <math.h>
+#include <dwg.h>
+#include "geom.h"
+
+void
+normalize (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt)
+{
+  double l = sqrt ((pt.x * pt.x) + (pt.y * pt.y) + (pt.z * pt.z));
+  *out = pt;
+  if (l != 1.0 && l != 0.0)
+    {
+      out->x = pt.x / l;
+      out->y = pt.y / l;
+      out->z = pt.z / l;
+    }
+}
+
+void
+cross (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt1, BITCODE_3DPOINT pt2)
+{
+  out->x = pt1.y * pt2.z - pt1.z * pt2.y;
+  out->y = pt1.z * pt2.x - pt1.x * pt2.z;
+  out->z = pt1.x * pt2.y - pt1.y * pt2.x;
+}
+
+// transform a 2D point via its OCS (extrusion) to 2D
+void
+transform_OCS_2d (BITCODE_2DPOINT *out, BITCODE_2DPOINT pt, BITCODE_BE ext)
+{
+  if (ext.x == 0.0 && ext.y == 0.0 && ext.z == 1.0)
+    {
+      *out = pt;
+    }
+  else if (ext.x == 0.0 && ext.y == 0.0 && ext.z == -1.0)
+    {
+      *out = pt;
+      out->x = - out->x;
+    }
+  else
+    {
+      /* This is called the "Arbitrary Axis Algorithm" to calculate
+         the OCS x-axis from the extrusion z-vector */
+      BITCODE_3DPOINT ax, ay, az, be;
+      be = (BITCODE_3DPOINT)ext;
+      normalize (&az, be);
+      if ((fabs (az.x) < 1 / 64.0) && (fabs (az.y) < 1 / 64.0))
+        {
+          BITCODE_3DPOINT tmp = { 0.0, 1.0, 0.0 };
+          cross (&tmp, tmp, az);
+          normalize (&ax, tmp);
+        }
+      else
+        {
+          BITCODE_3DPOINT tmp = { 0.0, 0.0, 1.0 };
+          cross (&tmp, tmp, az);
+          normalize (&ax, tmp);
+        }
+      cross (&ay, az, ax);
+      normalize (&ay, ay);
+      out->x = pt.x * ax.x + pt.y * ax.y;
+      out->y = pt.x * ay.x + pt.y * ay.y;
+   }
+  return;
+}
+
+// transform a 3D point via its OCS (extrusion) to 2D
+void
+transform_OCS (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt, BITCODE_BE ext)
+{
+  if (ext.x == 0.0 && ext.y == 0.0 && ext.z == 1.0)
+    {
+      *out = pt;
+    }
+  else if (ext.x == 0.0 && ext.y == 0.0 && ext.z == -1.0)
+    {
+      *out = pt;
+      out->x = - out->x;
+    }
+  else
+    {
+      /* This is called the "Arbitrary Axis Algorithm" to calculate
+         the OCS x-axis from the extrusion z-vector */
+      BITCODE_3DPOINT ax, ay, az, be;
+      be = (BITCODE_3DPOINT)ext;
+      normalize (&az, be);
+      if ((fabs (az.x) < 1 / 64.0) && (fabs (az.y) < 1 / 64.0))
+        {
+          BITCODE_3DPOINT tmp = { 0.0, 1.0, 0.0 };
+          cross (&tmp, tmp, az);
+          normalize (&ax, tmp);
+        }
+      else
+        {
+          BITCODE_3DPOINT tmp = { 0.0, 0.0, 1.0 };
+          cross (&tmp, tmp, az);
+          normalize (&ax, tmp);
+        }
+      cross (&ay, az, ax);
+      normalize (&ay, ay);
+      out->x = pt.x * ax.x + pt.y * ax.y + pt.z * ax.z;
+      out->y = pt.x * ay.x + pt.y * ay.y + pt.z * ay.z;
+      out->z = pt.x * az.x + pt.y * az.y + pt.z * az.z;
+    }
+  return;
+}
+
+// TODO: bulge -> arc for svg and ps.
+// Segmentation of arc,curves into plines for geojson.
+\n[end of programs/geom.c]\n[start of programs/escape.c]\nprograms/escape.c
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2019 Free Software Foundation, Inc.                        */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * escape.c: SVG helpers
+ * written by Reini Urban
+ */
+
+#include "config.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "common.h"
+#include "escape.h"
+
+char * ATTRIBUTE_MALLOC
+htmlescape (const char *restrict src, const int cp)
+{
+  int len;
+  char *dest, *d, *end;
+  unsigned char *s;
+  if (!src)
+    return NULL;
+  len = strlen (src) + 10;
+  d = calloc (len, 1);
+  s = (unsigned char *)src;
+  dest = d;
+  end = dest + len;
+  while (*s)
+    {
+      const int off = d - dest;
+      if (end - d <= 8)
+        {
+          len += 10;
+          dest = realloc (dest, len);
+          d = dest + off;
+          *d = 0;
+          end = dest + len;
+        }
+      switch (*s)
+        {
+        case '"':
+          strcat (d, "&quot;");
+          d += 6;
+          break;
+        case '\'':
+          strcat (d, "&#39;");
+          d += 5;
+          break;
+        case '`':
+          strcat (d, "&#96;");
+          d += 5;
+          break;
+        case '&':
+          strcat (d, "&amp;");
+          d += 5;
+          break;
+        case '<':
+          strcat (d, "&lt;");
+          d += 4;
+          break;
+        case '>':
+          strcat (d, "&gt;");
+          d += 4;
+          break;
+        case '{':
+          strcat (d, "&#123;");
+          d += 6;
+          break;
+        case '}':
+          strcat (d, "&#125;");
+          d += 6;
+          break;
+        default:
+          if (*s >= 127) // maybe encodings, no utf8 (see htmlwescape)
+            {
+              sprintf (d, "&#x%X;", *s); // 4 + 4
+              d += strlen (d);
+              *d = 0;
+            }
+          else if (*s >= 20)
+            {
+              *d++ = *s;
+              *d = 0;
+            }
+        }
+      s++;
+    }
+  *d = 0;
+  return dest;
+}
+
+char * ATTRIBUTE_MALLOC
+htmlwescape (BITCODE_TU wstr)
+{
+  int len = 0;
+  char *dest, *d;
+  BITCODE_TU tmp = wstr;
+  BITCODE_RS c;
+
+  if (!wstr)
+    return NULL;
+  while ((c = *tmp++))
+    len++;
+  len += 16;
+  d = dest = calloc (len, 1);
+
+  while (*wstr)
+    {
+      const int off = d - dest;
+      if (off >= len - 8)
+        {
+          len += 16;
+          dest = realloc (dest, len);
+          d = dest + off;
+          *d = 0;
+        }
+      switch (*wstr)
+        {
+        case 34: strcat (d, "&quot;"); d += 6; break;
+        case 39: strcat (d, "&#39;"); d += 5; break;
+        case 38: strcat (d, "&amp;"); d += 5; break;
+        case 60: strcat (d, "&lt;"); d += 4; break;
+        case 62: strcat (d, "&gt;"); d += 4; break;
+        case 96: strcat (d, "&#96;"); d += 5; break;
+        case 123: strcat (d, "&#123;"); d += 6; break;
+        case 125: strcat (d, "&#125;"); d += 6; break;
+        default:
+          if (*wstr >= 127) // utf8 encodings
+            {
+              sprintf (d, "&#x%X;", *wstr);
+              d += strlen (d);
+              *d = 0;
+            }
+          else if (*wstr >= 20)
+            {
+              *d++ = *wstr;
+              *d = 0;
+            }
+        }
+      wstr++;
+    }
+  *d = 0;
+  return dest;
+}
+\n[end of programs/escape.c]\n[start of programs/geom.h]\nprograms/geom.h
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2019 Free Software Foundation, Inc.                        */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * geom.h: geometric projections from OCS
+ * written by Reini Urban
+*/
+
+#ifndef _GEOM_H_
+#define _GEOM_H_
+
+#include "../src/config.h"
+#include <dwg.h>
+
+#ifndef M_PI
+#  define M_PI 3.14159265358979323846264338327950288
+#endif
+
+void normalize (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt);
+void cross (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt1, BITCODE_3DPOINT pt2);
+// transform a 2D point via its OCS (extrusion) to 2D
+void transform_OCS_2d (BITCODE_2DPOINT *out, BITCODE_2DPOINT pt, BITCODE_BE ext);
+// transform a 3D point via its OCS (extrusion) to 2D
+void transform_OCS (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt, BITCODE_BE ext);
+// TODO: bulge -> arc for svg and ps
+
+#endif  /* _GEOM_H_ */
+\n[end of programs/geom.h]\n[start of programs/dwggrep.c]\nprograms/dwggrep.c
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2018-2020 Free Software Foundation, Inc.                   */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * dwggrep.c: search a string in all text values in a DWG
+ * TODO scan the dwg.spec for all text DXF codes, per object.
+ *
+ * written by Reini Urban
+ */
+
+#include "../src/config.h"
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef HAVE_STRCASESTR
+#  undef __DARWIN_C_LEVEL
+#  define __DARWIN_C_LEVEL __DARWIN_C_FULL
+#  ifndef __USE_GNU
+#    define __USE_GNU
+#  endif
+#  ifndef __BSD_VISIBLE
+#    define __BSD_VISIBLE 1
+#  endif
+#  include <string.h>
+#else
+#  include <string.h>
+#  include <ctype.h>
+#endif
+#include <getopt.h>
+#ifdef HAVE_PCRE2_H
+// use both, 8 and 16 (r2007+)
+#  define PCRE2_CODE_UNIT_WIDTH 0
+#  include <pcre2.h>
+#endif
+
+static const int verbose = 0;
+
+#include "dwg.h"
+#include "logging.h"
+#include "common.h"
+#include "bits.h"
+#include "dwg_api.h"
+
+#ifndef HAVE_PCRE2_H
+#  define PCRE2_MULTILINE 1
+#  define PCRE2_CASELESS 2
+#  define PCRE2_EXTENDED 3
+#  define PCRE2_NO_AUTO_CAPTURE 4
+#  define PCRE2_NO_DOTSTAR_ANCHOR 5
+#else
+#  define PCRE2_JIT_MATCH_OPTIONS                                             \
+    (PCRE2_NO_UTF_CHECK | PCRE2_NOTBOL | PCRE2_NOTEOL | PCRE2_NOTEMPTY        \
+     | PCRE2_NOTEMPTY_ATSTART)
+#  define PCRE2_JIT_COMPILE_OPTIONS (PCRE2_JIT_COMPLETE)
+#endif
+
+char *pattern;
+char buf[4096];
+// partial to find substrings, not only complete matches
+int options
+    = PCRE2_MULTILINE | PCRE2_NO_AUTO_CAPTURE | PCRE2_NO_DOTSTAR_ANCHOR;
+int opt_count = 0;
+int opt_text = 0;
+int opt_blocks = 0;
+int opt_tables = 0;
+int opt_filename = 1;
+short numdxf = 0;
+short numtype = 0;
+static short dxf[10];  // ensure zero-fill
+static char *type[10]; // ensure zero-fill
+
+/* the current version per spec block */
+static unsigned int cur_ver = 0;
+
+#ifdef HAVE_PCRE2_H
+#  undef USE_MATCH_CONTEXT
+/* pcre2_compile */
+static pcre2_code_8 *ri8;
+static pcre2_match_data_8 *match_data8;
+static pcre2_match_context_8 *match_context8 = NULL;
+#  ifdef HAVE_PCRE2_16
+static pcre2_code_16 *ri16;
+static pcre2_match_data_16 *match_data16;
+static pcre2_match_context_16 *match_context16 = NULL;
+#  endif
+
+#  ifdef USE_MATCH_CONTEXT
+static pcre2_jit_stack_8 *jit_stack8 = NULL;
+static pcre2_compile_context_8 *compile_context8 = NULL;
+#    ifdef HAVE_PCRE2_16
+static pcre2_jit_stack_16 *jit_stack16 = NULL;
+static pcre2_compile_context_16 *compile_context16 = NULL;
+#    endif
+#  endif
+#endif
+
+static int
+usage (void)
+{
+  printf ("\nUsage: dwggrep [-cRr] pattern *.dwg\n");
+  return 1;
+}
+static int
+opt_version (void)
+{
+  printf ("dwggrep %s\n", PACKAGE_VERSION);
+  return 0;
+}
+static int
+help (void)
+{
+  printf ("\nUsage: dwggrep [OPTIONS]... pattern files\n");
+#ifdef HAVE_PCRE2_H
+  printf ("Search regex pattern in a list of DWGs.\n\n");
+#else
+  printf ("Search string (no regex) in a list of DWGs.\n\n");
+#endif
+  printf ("  -i                        Case-insensitive pattern\n");
+#ifdef HAVE_PCRE2_H
+  printf ("  -x                        Extended regex pattern\n");
+#endif
+  printf ("  -c, --count               Print only the count of matched "
+          "elements.\n");
+  printf ("  -h, --no-filename         Print no filename.\n");
+#if 0
+  printf("  -R, -r, --recursive       Recursively search subdirectories listed.\n");
+#endif
+  printf (
+      "  -y, --type NAME           Search only NAME entities or objects.\n");
+  printf ("  -d, --dxf NUM             Search only DXF group NUM fields.\n");
+  printf ("  -t, --text                Search only in TEXT-like entities.\n");
+  printf ("  -b, --blocks              Search also in all block definitions.\n");
+  printf("       --tables              Search only in table names.\n");
+#ifdef HAVE_GETOPT_LONG
+  printf ("      --help                Display this help and exit\n");
+  printf ("      --version             Output version information and exit\n"
+          "\n");
+#else
+  printf ("  -u                        Display this help and exit\n");
+  printf ("  -v                        Output version information and exit\n"
+          "\n");
+#endif
+  printf ("GNU LibreDWG online manual: "
+          "<https://www.gnu.org/software/libredwg/>\n");
+  return 0;
+}
+
+static void
+print_match (const int is16, const char *restrict filename,
+             const char *restrict entity, const int dxfgroup,
+             char *restrict text)
+{
+  if (is16)
+    text = bit_convert_TU ((BITCODE_TU)text);
+  printf ("%s %s %d: %s\n", opt_filename ? filename : "", entity, dxfgroup,
+          text);
+  if (is16)
+    free (text);
+}
+
+static int
+do_match (const int is16, const char *restrict filename,
+          const char *restrict entity, const int dxfgroup, char *restrict text)
+{
+#ifdef HAVE_PCRE2_H
+  int rc;
+#  ifdef HAVE_PCRE2_16
+  if (is16)
+    rc = pcre2_match_16 (ri16, (PCRE2_SPTR16)text, PCRE2_ZERO_TERMINATED, 0,
+                         PCRE2_JIT_MATCH_OPTIONS,
+                         match_data16,     /* block for storing the result */
+                         match_context16); /* disabled */
+  else
+#  endif
+    // already converted to UTF-8 before
+    rc = pcre2_match_8 (ri8, (PCRE2_SPTR8)text, PCRE2_ZERO_TERMINATED, 0,
+                        PCRE2_JIT_MATCH_OPTIONS,
+                        match_data8,     /* block for storing the result */
+                        match_context8); /* disabled */
+  if (rc >= 0)
+    {
+      if (!opt_count)
+        print_match (is16, filename, entity, dxfgroup, text);
+      return 1;
+    }
+  else if (rc < -2)
+    { // not PCRE2_ERROR_NOMATCH nor PCRE2_ERROR_PARTIAL
+      pcre2_get_error_message_8 (rc, (PCRE2_UCHAR8 *)buf, 4096);
+      LOG_WARN ("pcre2 match error %s with %s", buf, pattern);
+    }
+  return 0;
+
+#else
+
+  if (options & PCRE2_CASELESS)
+    {
+#  ifndef HAVE_STRCASESTR
+      int i, len, dmax;
+      char *dest = text;
+      int dlen = dmax = strlen (text);
+      char *src = pattern;
+      int slen = strlen (pattern);
+
+      while (*dest && dmax)
+        {
+          i = 0;
+          len = slen;
+          dlen = dmax;
+          while (dest[i] && dlen)
+            {
+              if (toupper ((unsigned char)dest[i])
+                  != toupper ((unsigned char)src[i]))
+                {
+                  break;
+                }
+              /* move to the next char */
+              i++;
+              len--;
+              dlen--;
+
+              if (src[i] == '\0' || !len)
+                {
+                  if (!opt_count)
+                    print_match (is16, filename, entity, dxfgroup, text);
+                  return 1;
+                }
+            }
+          dest++;
+          dmax--;
+        }
+#  else
+      if (strcasestr (text, pattern))
+        {
+          if (!opt_count)
+            print_match (is16, filename, entity, dxfgroup, text);
+          return 1;
+        }
+#  endif
+    }
+  else
+    {
+      if (strstr (text, pattern))
+        {
+          if (!opt_count)
+            print_match (is16, filename, entity, dxfgroup, text);
+          return 1;
+        }
+    }
+  return 0;
+#endif
+}
+
+// check matching dxfgroup first to avoid costly utf8 conversions
+#define MATCH_DXF(type, ENTITY, text_field, dxfgroup)                         \
+  if (numdxf)                                                                 \
+    {                                                                         \
+      int dxfok = 0;                                                          \
+      for (int _i = 0; _i < numdxf; _i++)                                     \
+        {                                                                     \
+          if (dxf[_i] == dxfgroup)                                            \
+            {                                                                 \
+              dxfok = 1;                                                      \
+              break;                                                          \
+            }                                                                 \
+        }                                                                     \
+      if (dxfok)                                                              \
+        {                                                                     \
+          MATCH_TYPE (type, ENTITY, text_field, dxfgroup);                    \
+        }                                                                     \
+    }                                                                         \
+  else                                                                        \
+    {                                                                         \
+      MATCH_TYPE (type, ENTITY, text_field, dxfgroup);                        \
+    }
+
+// 8bit only
+#define MATCH_NO16(type, ENTITY, text_field, dxfgroup)                        \
+  text = (char *)obj->tio.type->tio.ENTITY->text_field;                       \
+  if (text && numdxf)                                                         \
+    {                                                                         \
+      int dxfok = 0;                                                          \
+      for (int i = 0; i < numdxf; i++)                                        \
+        {                                                                     \
+          if (dxf[i] == dxfgroup)                                             \
+            {                                                                 \
+              dxfok = 1;                                                      \
+              break;                                                          \
+            }                                                                 \
+        }                                                                     \
+      if (dxfok)                                                              \
+        {                                                                     \
+          found += do_match (0, filename, #ENTITY, dxfgroup, text);           \
+        }                                                                     \
+    }                                                                         \
+  else if (text)                                                              \
+    {                                                                         \
+      found += do_match (0, filename, #ENTITY, dxfgroup, text);               \
+    }
+
+#ifdef HAVE_PCRE2_16
+#  define MATCH_TYPE(type, ENTITY, text_field, dxfgroup)                      \
+    text = (char *)obj->tio.type->tio.ENTITY->text_field;                     \
+    if (text)                                                                 \
+    found += do_match (obj->parent->header.version >= R_2007, filename,       \
+                       #ENTITY, dxfgroup, text)
+#else
+#  define MATCH_TYPE(type, ENTITY, text_field, dxfgroup)                      \
+    text = (char *)obj->tio.type->tio.ENTITY->text_field;                     \
+    if (text)                                                                 \
+      {                                                                       \
+        if (obj->parent->header.version >= R_2007)                            \
+          text = bit_convert_TU ((BITCODE_TU)text);                           \
+        found += do_match (obj->parent->header.version >= R_2007, filename,   \
+                           #ENTITY, dxfgroup, text);                          \
+        if (obj->parent->header.version >= R_2007)                            \
+          free (text);                                                        \
+      }
+#endif
+
+#define MATCH_ENTITY(ENTITY, text_field, dxf)                                 \
+  MATCH_DXF (entity, ENTITY, text_field, dxf)
+#define MATCH_OBJECT(ENTITY, text_field, dxf)                                 \
+  MATCH_DXF (object, ENTITY, text_field, dxf)
+#define MATCH_TABLE(ENTITY, handle, TABLE, dxf)                               \
+  {                                                                           \
+  }
+
+static int
+match_TEXT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (TEXT, text_value, 1);
+  if (!opt_text)
+    {
+      MATCH_TABLE (TEXT, style, STYLE, 7);
+    }
+  return found;
+}
+
+static int
+match_ATEXT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (ATEXT, text_value, 1);
+  if (!opt_text)
+    {
+      // ignore the various sizes stored as text
+      MATCH_ENTITY (ATEXT, style, 7);
+    }
+  return found;
+}
+
+static int
+match_ATTRIB (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  // printf("--ATTRIB %lX %s\n", obj->handle.value, filename);
+  MATCH_ENTITY (ATTRIB, text_value, 1);
+  MATCH_ENTITY (ATTRIB, tag, 2);
+  if (!opt_text)
+    {
+      MATCH_TABLE (ATTRIB, style, STYLE, 7);
+    }
+  return found;
+}
+
+static int
+match_ATTDEF (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (ATTDEF, default_value, 1);
+  MATCH_ENTITY (ATTDEF, tag, 2);
+  MATCH_ENTITY (ATTDEF, prompt, 3);
+  return found;
+}
+
+static int
+match_MTEXT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (MTEXT, text, 1);
+  return found;
+}
+
+static int
+match_BLOCK (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (BLOCK, name, 2);
+  return found;
+}
+
+static int
+match_DIMENSION (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  // int is16 = obj->parent->header.version >= R_2007;
+
+  text = obj->tio.entity->tio.DIMENSION_ORDINATE->user_text;
+  if (text)
+    found += do_match (0, filename, "DIMENSION", 1, text);
+  return found;
+}
+
+static int
+match_VIEWPORT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (VIEWPORT, style_sheet, 1);
+  return found;
+}
+static int
+match_LEADER (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //MATCH_ENTITY (LEADER, text, 1);
+  return found;
+}
+static int
+match_MULTILEADER (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Entity_MULTILEADER *_obj = obj->tio.entity->tio.MULTILEADER;
+  if (_obj->ctx.has_content_txt)
+    {
+      MATCH_ENTITY (MULTILEADER, ctx.content.txt.default_text, 304);
+    }
+  // SUB_FIELD_T (blocklabels[rcount1],label_text, 302);
+  return found;
+}
+
+static int
+match_3DSOLID (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text = NULL;
+  int found = 0;
+  BITCODE_BL j;
+  Dwg_Entity_3DSOLID *_obj;
+
+  if (!obj || !obj->tio.entity)
+    return 0;
+  _obj = obj->tio.entity->tio._3DSOLID;
+  if (!_obj)
+    return 0;
+  if (_obj->acis_data)
+    {
+      MATCH_NO16 (entity, _3DSOLID, acis_data, 1);
+      // MATCH_ENTITY (_3DSOLID, acis_data, 1);
+      // found += do_match(0, filename, "3DSOLID", 1, (char*)_obj->acis_data);
+    }
+  /*
+  if (!_obj->encr_sat_data) return 0;
+  for (j=0; j<_obj->num_blocks; j++)
+    {
+      //text = _obj->encr_sat_data[j];
+      //if (text)
+      //  found += do_match(0, filename, "3DSOLID", 301, text);
+      MATCH_NO16 (entity, _3DSOLID, encr_sat_data[j], 301);
+    }
+  */
+  return found;
+}
+
+static int
+match_DICTIONARY (const char *restrict filename,
+                  const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i;
+  Dwg_Object_DICTIONARY *_obj = obj->tio.object->tio.DICTIONARY;
+
+  for (i = 0; i < _obj->numitems; i++)
+    {
+      MATCH_OBJECT (DICTIONARY, texts[i], 3);
+    }
+  return found;
+}
+
+static int
+match_STYLE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (STYLE, name, 2);
+  if (!opt_tables)
+    {
+      MATCH_OBJECT (STYLE, font_file, 3);
+      MATCH_OBJECT (STYLE, bigfont_file, 4);
+    }
+  return found;
+}
+
+static int
+match_LTYPE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (LTYPE, name, 2);
+  MATCH_OBJECT (LTYPE, description, 3);
+  if (!opt_tables)
+    {
+      MATCH_OBJECT (LTYPE, strings_area, 3);
+    }
+  return found;
+}
+static int
+match_LAYER (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (LAYER, name, 2);
+  return found;
+}
+static int
+match_VIEW (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (VIEW, name, 2);
+  return found;
+}
+static int
+match_VPORT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (VPORT, name, 2);
+  return found;
+}
+static int
+match_UCS (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (UCS, name, 2);
+  return found;
+}
+static int
+match_VX_TABLE_RECORD (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (VX_TABLE_RECORD, name, 2);
+  return found;
+}
+
+static int
+match_DIMSTYLE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (DIMSTYLE, name, 2);
+  if (!opt_tables)
+    {
+      MATCH_OBJECT (DIMSTYLE, DIMPOST, 3);
+      MATCH_OBJECT (DIMSTYLE, DIMAPOST, 4);
+      MATCH_OBJECT (DIMSTYLE, DIMBLK_T, 5);
+      MATCH_OBJECT (DIMSTYLE, DIMBLK1_T, 6);
+      MATCH_OBJECT (DIMSTYLE, DIMBLK2_T, 7);
+      MATCH_OBJECT (DIMSTYLE, DIMMZS, 0);
+      MATCH_OBJECT (DIMSTYLE, DIMALTMZS, 0);
+    }
+  return found;
+}
+
+static int
+match_GROUP (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (GROUP, name, 3);
+  return found;
+}
+
+static int
+match_MLINESTYLE (const char *restrict filename,
+                  const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (MLINESTYLE, name, 2);
+  MATCH_OBJECT (MLINESTYLE, description, 3);
+  return found;
+}
+
+static int
+match_DICTIONARYVAR (const char *restrict filename,
+                     const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (DICTIONARYVAR, strvalue, 1);
+  return found;
+}
+
+static int
+match_HATCH (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (HATCH, name, 2);
+  MATCH_ENTITY (HATCH, gradient_name, 470);
+  return found;
+}
+static int
+match_TOLERANCE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_ENTITY (TOLERANCE, text_value, 1);
+  return found;
+}
+
+static int
+match_IMAGEDEF (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (IMAGEDEF, file_path, 1);
+  return found;
+}
+
+static int
+match_SCALE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0, i;
+  //const Dwg_Object_SCALE *_obj = obj->tio.object->tio.SCALE;
+  MATCH_OBJECT (SCALE, name, 1);
+  return found;
+}
+
+static int
+match_LAYER_INDEX (const char *restrict filename,
+                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i;
+  const Dwg_Object_LAYER_INDEX *_obj = obj->tio.object->tio.LAYER_INDEX;
+  for (i = 0; i < _obj->num_entries; i++)
+    {
+      MATCH_OBJECT (LAYER_INDEX, entries[i].name, 8);
+    }
+  return found;
+}
+
+static int
+match_LAYOUT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i;
+  const Dwg_Object_LAYOUT *_obj = obj->tio.object->tio.LAYOUT;
+
+  MATCH_OBJECT (LAYOUT, plotsettings.printer_cfg_file, 1);
+  MATCH_OBJECT (LAYOUT, plotsettings.paper_size, 2);
+  MATCH_OBJECT (LAYOUT, plotsettings.canonical_media_name, 4);
+  MATCH_TABLE (LAYOUT, plotsettings.plotview, VIEW, 6);
+  MATCH_OBJECT (LAYOUT, plotsettings.plotview_name, 6);
+  MATCH_OBJECT (LAYOUT, plotsettings.stylesheet, 7);
+
+  MATCH_OBJECT (LAYOUT, layout_name, 1);
+  MATCH_TABLE (LAYOUT, block_header, BLOCK, 330);
+  MATCH_TABLE (LAYOUT, active_viewport, VIEWPORT, 331);
+  MATCH_TABLE (LAYOUT, shadeplot, VISUALSTYLE, 333);
+  MATCH_TABLE (LAYOUT, base_ucs, UCS, 346);
+  MATCH_TABLE (LAYOUT, named_ucs, UCS, 345);
+  for (i = 0; i < _obj->num_viewports; i++)
+    {
+      MATCH_TABLE (LAYOUT, viewports[i], VPORT, 0);
+    }
+  return found;
+}
+
+static int
+match_FIELD (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i;
+  const Dwg_Object_FIELD *_obj = obj->tio.object->tio.FIELD;
+
+  MATCH_OBJECT (FIELD, format, 4);
+  MATCH_OBJECT (FIELD, evaluation_error_msg, 300);
+  MATCH_OBJECT (FIELD, value.format_string, 300);
+  MATCH_OBJECT (FIELD, value.value_string, 300);
+  MATCH_OBJECT (FIELD, value_string, 301);
+  for (i = 0; i < _obj->num_childval; i++)
+    {
+      MATCH_OBJECT (FIELD, childval[i].key, 6);
+      MATCH_OBJECT (FIELD, childval[i].value.format_string, 300);
+      MATCH_OBJECT (FIELD, childval[i].value.value_string, 302);
+    }
+  return found;
+}
+
+static int
+match_TABLE (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i, j;
+  const Dwg_Entity_TABLE *_obj = obj->tio.entity->tio.TABLE;
+
+  for (i = 0; i < _obj->num_cells; i++)
+    {
+      if (_obj->cells[i].type == 1)
+        {
+          MATCH_ENTITY (TABLE, cells[i].text_value, 1);
+        }
+      else if (_obj->cells[i].type == 2
+               && _obj->cells[i].additional_data_flag == 1
+               && _obj->cells[i].num_attr_defs)
+        {
+          for (j = 0; j < _obj->cells[i].num_attr_defs; j++)
+            {
+              MATCH_ENTITY (TABLE, cells[i].attr_defs[j].text, 300);
+            }
+        }
+    }
+  return found;
+}
+
+static int
+match_TABLECONTENT (const char *restrict filename,
+                    const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  BITCODE_BL i, j, k;
+  const Dwg_Object_TABLECONTENT *_obj = obj->tio.object->tio.TABLECONTENT;
+
+  MATCH_OBJECT (TABLECONTENT, ldata.name, 1);
+  MATCH_OBJECT (TABLECONTENT, ldata.description, 300);
+  for (i = 0; i < _obj->tdata.num_cols; i++)
+    {
+      MATCH_OBJECT (TABLECONTENT, tdata.cols[i].name, 300);
+    }
+  for (i = 0; i < _obj->tdata.num_rows; i++)
+    {
+      for (j = 0; j < _obj->tdata.rows[i].num_cells; j++)
+        {
+          MATCH_OBJECT (TABLECONTENT, tdata.rows[i].cells[j].tooltip, 300);
+          for (k = 0; k < _obj->tdata.rows[i].cells[j].num_customdata_items;
+               k++)
+            {
+#define _custom tdata.rows[i].cells[j].customdata_items[k]
+              MATCH_OBJECT (TABLECONTENT, _custom.name, 300);
+              if (_obj->_custom.value.data_type == 4)
+                {
+                  MATCH_OBJECT (TABLECONTENT, _custom.value.data_string, 302);
+                }
+#undef _custom
+            }
+          for (k = 0; k < _obj->tdata.rows[i].cells[j].num_cell_contents; k++)
+            {
+#define _content tdata.rows[i].cells[j].cell_contents[k]
+              if (_obj->_content.type == 1
+                  && _obj->_content.value.data_type == 4)
+                {
+                  MATCH_OBJECT (TABLECONTENT, _content.value.data_string, 302);
+                }
+#undef _content
+            }
+        }
+    }
+  return found;
+}
+
+static int
+match_GEODATA (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_GEODATA *_obj = obj->tio.object->tio.GEODATA;
+
+  MATCH_OBJECT (GEODATA, coord_system_def, 0);
+  MATCH_OBJECT (GEODATA, geo_rss_tag, 302);
+  MATCH_OBJECT (GEODATA, observation_from_tag, 305);
+  MATCH_OBJECT (GEODATA, observation_to_tag, 306);
+  MATCH_OBJECT (GEODATA, observation_coverage_tag, 0);
+  // obsolete
+  MATCH_OBJECT (GEODATA, coord_system_datum, 0);
+  MATCH_OBJECT (GEODATA, coord_system_wkt, 0);
+  return found;
+}
+
+static int
+match_GEOPOSITIONMARKER (const char *restrict filename,
+                         const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Entity_GEOPOSITIONMARKER *_obj = obj->tio.entity->tio.GEOPOSITIONMARKER;
+
+  MATCH_ENTITY (GEOPOSITIONMARKER, notes, 1);
+  //if enabled
+  //MATCH_ENTITY (GEOPOSITIONMARKER, mtext->tio.entity->tio.MTEXT->text, 3);
+  return found;
+}
+
+static int
+match_UNDERLAYDEFINITION (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_UNDERLAYDEFINITION *_obj = obj->tio.object->tio.UNDERLAYDEFINITION;
+
+  MATCH_OBJECT (UNDERLAYDEFINITION, filename, 1);
+  MATCH_OBJECT (UNDERLAYDEFINITION, name, 2);
+  return found;
+}
+
+static int
+match_VISUALSTYLE (const char *restrict filename,
+                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0, i;
+  //const Dwg_Object_VISUALSTYLE *_obj = obj->tio.object->tio.VISUALSTYLE;
+  MATCH_OBJECT (VISUALSTYLE, description, 1);
+  return found;
+}
+
+static int
+match_TABLESTYLE (const char *restrict filename,
+                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0, i;
+  //const Dwg_Object_TABLESTYLE *_obj = obj->tio.object->tio.TABLESTYLE;
+  MATCH_OBJECT (TABLESTYLE, name, 2);
+  return found;
+}
+static int
+match_LIGHT (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Entity_LIGHT *_obj = obj->tio.entity->tio.LIGHT;
+  MATCH_ENTITY (LIGHT, name, 1);
+  // MATCH_ENTITY (LIGHT, web_file, 1);
+  return found;
+}
+
+static int
+match_SUNSTUDY (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_SUNSTUDY *_obj = obj->tio.object->tio.SUNSTUDY;
+  MATCH_OBJECT (SUNSTUDY, setup_name, 1);
+  MATCH_OBJECT (SUNSTUDY, description, 2);
+  MATCH_OBJECT (SUNSTUDY, sheet_set_name, 3);
+  return found;
+}
+
+static int
+match_LIGHTLIST (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_LIGHTLIST *_obj = obj->tio.object->tio.LIGHTLIST;
+
+  for (BITCODE_BL i = 0; i < _obj->num_lights; i++)
+    {
+      MATCH_OBJECT (LIGHTLIST, lights[i].name, 1);
+    }
+  return found;
+}
+
+static int
+match_DBCOLOR (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_DBCOLOR *_obj = obj->tio.object->tio.DBCOLOR;
+  MATCH_OBJECT (DBCOLOR, color.name, 430);
+  MATCH_OBJECT (DBCOLOR, color.book_name, 430);
+  return found;
+}
+
+static int
+match_MATERIAL (const char *restrict filename, const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_MATERIAL *_obj = obj->tio.object->tio.MATERIAL;
+  MATCH_OBJECT (MATERIAL, name, 1);
+  MATCH_OBJECT (MATERIAL, description, 2);
+  MATCH_OBJECT (MATERIAL, diffusemap.filename, 3);
+  MATCH_OBJECT (MATERIAL, specularmap.filename, 4);
+  MATCH_OBJECT (MATERIAL, reflectionmap.filename, 6);
+  MATCH_OBJECT (MATERIAL, opacitymap.filename, 7);
+  MATCH_OBJECT (MATERIAL, bumpmap.filename, 8);
+  MATCH_OBJECT (MATERIAL, refractionmap.filename, 9);
+  //MATCH_OBJECT (MATERIAL, normalmap.filename, 3);
+  //MATCH_OBJECT (MATERIAL, genprocname, 300);
+  //MATCH_OBJECT (MATERIAL, genprocvaltext, 301);
+  //MATCH_OBJECT (MATERIAL, genprocvalcolorname, 430);
+  return found;
+}
+
+static int
+match_PLOTSETTINGS (const char *restrict filename,
+                    const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  //const Dwg_Object_PLOTSETTINGS *_obj = obj->tio.object->tio.PLOTSETTINGS;
+  MATCH_OBJECT (PLOTSETTINGS, printer_cfg_file, 1);
+  MATCH_OBJECT (PLOTSETTINGS, paper_size, 2);
+  MATCH_OBJECT (PLOTSETTINGS, canonical_media_name, 4);
+  MATCH_OBJECT (PLOTSETTINGS, plotview_name, 6);
+  MATCH_TABLE (PLOTSETTINGS, VIEW, plotview, 6);
+  MATCH_OBJECT (PLOTSETTINGS, stylesheet, 7);
+  MATCH_TABLE (PLOTSETTINGS, VISUALSTYLE, shadeplot, 333);
+  return found;
+}
+static int
+match_DIMASSOC (const char *restrict filename,
+                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_DIMASSOC *_obj = obj->tio.object->tio.DIMASSOC;
+  for (BITCODE_BL i = 0; i < 4; i++)
+    {
+      if (_obj->ref[i].classname)
+        {
+          MATCH_OBJECT (DIMASSOC, ref[i].classname, 0);
+        }
+    }
+  return found;
+}
+
+static int
+match_ASSOCOSNAPPOINTREFACTIONPARAM (const char *restrict filename,
+                                     const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCOSNAPPOINTREFACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCEDGEACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCEDGEACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCFACEACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCFACEACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCOBJECTACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCOBJECTACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCPATHACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCPATHACTIONPARAM, name, 1);
+  return found;
+}
+static int
+match_ASSOCVERTEXACTIONPARAM (const char *restrict filename,
+                        const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (ASSOCVERTEXACTIONPARAM, name, 1);
+  return found;
+}
+
+// TODO match on its subclasses which holds the text:
+//  ASSOCVARIABLE, EvalVariant
+
+#define MATCH_AcDbAssocParamBasedActionBody(_type)                            \
+  for (unsigned i = 0; i < _obj->pab.num_values; i++)                         \
+  {                                                                           \
+    MATCH_OBJECT (_type, pab.values[i].name, 1);                              \
+    for (unsigned j = 0; j < _obj->pab.values[i].num_vars; j++)               \
+      {                                                                       \
+        int _dxf = _obj->pab.values[i].vars[j].value.code;                    \
+        if (dwg_resbuf_value_type (_dxf) == VT_STRING)                          \
+          {                                                                   \
+            MATCH_OBJECT (_type, pab.values[i].vars[j].value.u.text, _dxf);   \
+          }                                                                   \
+      }                                                                       \
+  }
+
+static int
+match_ASSOCMLEADERACTIONBODY (const char *restrict filename,
+                                       const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCMLEADERACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCMLEADERACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCMLEADERACTIONBODY)
+  return found;
+}
+static int
+match_ASSOC3POINTANGULARDIMACTIONBODY (const char *restrict filename,
+                                       const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOC3POINTANGULARDIMACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOC3POINTANGULARDIMACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOC3POINTANGULARDIMACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCALIGNEDDIMACTIONBODY (const char *restrict filename,
+                                 const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCALIGNEDDIMACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCALIGNEDDIMACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCALIGNEDDIMACTIONBODY)
+  return found;
+}
+
+static int
+match_ASSOCORDINATEDIMACTIONBODY (const char *restrict filename,
+                                 const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCORDINATEDIMACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCORDINATEDIMACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCORDINATEDIMACTIONBODY)
+  return found;
+}
+
+static int
+match_ASSOCROTATEDDIMACTIONBODY (const char *restrict filename,
+                                 const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCROTATEDDIMACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCROTATEDDIMACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCROTATEDDIMACTIONBODY)
+  return found;
+}
+
+static int
+match_ASSOCPATCHSURFACEACTIONBODY (const char *restrict filename,
+                                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCPATCHSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCPATCHSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCPATCHSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCPLANESURFACEACTIONBODY (const char *restrict filename,
+                                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCPLANESURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCPLANESURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCPLANESURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCEXTENDSURFACEACTIONBODY (const char *restrict filename,
+                                      const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCEXTENDSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCEXTENDSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCEXTENDSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCEXTRUDEDSURFACEACTIONBODY (const char *restrict filename,
+                                      const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCEXTRUDEDSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCEXTRUDEDSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCEXTRUDEDSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCFILLETSURFACEACTIONBODY (const char *restrict filename,
+                                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCFILLETSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCFILLETSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCFILLETSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCLOFTEDSURFACEACTIONBODY (const char *restrict filename,
+                                    const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCLOFTEDSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCLOFTEDSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCLOFTEDSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCNETWORKSURFACEACTIONBODY (const char *restrict filename,
+                                    const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCNETWORKSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCNETWORKSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCNETWORKSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCOFFSETSURFACEACTIONBODY (const char *restrict filename,
+                                    const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCOFFSETSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCOFFSETSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCOFFSETSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCREVOLVEDSURFACEACTIONBODY (const char *restrict filename,
+                                      const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCREVOLVEDSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCREVOLVEDSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCREVOLVEDSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCSWEPTSURFACEACTIONBODY (const char *restrict filename,
+                                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCSWEPTSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCSWEPTSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCSWEPTSURFACEACTIONBODY)
+  return found;
+}
+static int
+match_ASSOCTRIMSURFACEACTIONBODY (const char *restrict filename,
+                                   const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  const Dwg_Object_ASSOCTRIMSURFACEACTIONBODY *_obj
+      = obj->tio.object->tio.ASSOCTRIMSURFACEACTIONBODY;
+  MATCH_AcDbAssocParamBasedActionBody (ASSOCTRIMSURFACEACTIONBODY)
+  return found;
+}
+
+static int
+match_BLOCKPARAMDEPENDENCYBODY (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (BLOCKPARAMDEPENDENCYBODY, name, 1);
+  return found;
+}
+static int
+match_BLOCKMOVEACTION (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (BLOCKMOVEACTION, conn_pts[0].name, 301);
+  MATCH_OBJECT (BLOCKMOVEACTION, conn_pts[1].name, 302);
+  return found;
+}
+static int
+match_BLOCKSTRETCHACTION (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (BLOCKSTRETCHACTION, conn_pts[0].name, 301);
+  MATCH_OBJECT (BLOCKSTRETCHACTION, conn_pts[1].name, 302);
+  return found;
+}
+static int
+match_BLOCKROTATEACTION (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (BLOCKROTATEACTION, conn_pts[0].name, 301);
+  MATCH_OBJECT (BLOCKROTATEACTION, conn_pts[1].name, 302);
+  MATCH_OBJECT (BLOCKROTATEACTION, conn_pts[2].name, 303);
+  return found;
+}
+static int
+match_BLOCKVISIBILITYGRIP (const char *restrict filename,
+                               const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKVISIBILITYGRIP *_obj = obj->tio.object->tio.BLOCKVISIBILITYGRIP;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKVISIBILITYGRIP, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKVISIBILITYGRIP, name, 1);
+  return found;
+}
+static int
+match_BLOCKGRIPLOCATIONCOMPONENT (const char *restrict filename,
+                               const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKGRIPLOCATIONCOMPONENT *_obj = obj->tio.object->tio.BLOCKGRIPLOCATIONCOMPONENT;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKGRIPLOCATIONCOMPONENT, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKGRIPLOCATIONCOMPONENT, grip_expr, 91);
+  return found;
+}
+static int
+match_BLOCKBASEPOINTPARAMETER (const char *restrict filename,
+                               const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKBASEPOINTPARAMETER *_obj = obj->tio.object->tio.BLOCKBASEPOINTPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKBASEPOINTPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKBASEPOINTPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop2.connections[i].name, 302);
+    }
+  return found;
+}
+static int
+match_BLOCKLINEARPARAMETER (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKLINEARPARAMETER *_obj = obj->tio.object->tio.BLOCKLINEARPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKLINEARPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKLINEARPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKLINEARPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKLINEARPARAMETER, prop2.connections[i].name, 302);
+    }
+  for (unsigned i = 0; i < _obj->prop3.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKLINEARPARAMETER, prop3.connections[i].name, 303);
+    }
+  for (unsigned i = 0; i < _obj->prop4.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKLINEARPARAMETER, prop4.connections[i].name, 304);
+    }
+  MATCH_OBJECT (BLOCKLINEARPARAMETER, distance_name, 305);
+  MATCH_OBJECT (BLOCKLINEARPARAMETER, distance_desc, 306);
+  MATCH_OBJECT (BLOCKLINEARPARAMETER, value_set.desc, 307);
+  return found;
+}
+static int
+match_BLOCKFLIPPARAMETER (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKFLIPPARAMETER *_obj = obj->tio.object->tio.BLOCKFLIPPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKFLIPPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKFLIPPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKFLIPPARAMETER, prop2.connections[i].name, 302);
+    }
+  for (unsigned i = 0; i < _obj->prop3.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKFLIPPARAMETER, prop3.connections[i].name, 303);
+    }
+  for (unsigned i = 0; i < _obj->prop4.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKFLIPPARAMETER, prop4.connections[i].name, 304);
+    }
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, flip_label, 305);
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, flip_label_desc, 306);
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, base_state_label, 307);
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, flipped_state_label, 308);
+  MATCH_OBJECT (BLOCKFLIPPARAMETER, tooltip, 309);
+  return found;
+}
+static int
+match_BLOCKROTATIONPARAMETER (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKROTATIONPARAMETER *_obj = obj->tio.object->tio.BLOCKROTATIONPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKROTATIONPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop2.connections[i].name, 302);
+    }
+  for (unsigned i = 0; i < _obj->prop3.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop3.connections[i].name, 303);
+    }
+  for (unsigned i = 0; i < _obj->prop4.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKROTATIONPARAMETER, prop4.connections[i].name, 304);
+    }
+  MATCH_OBJECT (BLOCKROTATIONPARAMETER, angle_name, 305);
+  MATCH_OBJECT (BLOCKROTATIONPARAMETER, angle_desc, 306);
+  MATCH_OBJECT (BLOCKROTATIONPARAMETER, angle_value_set.desc, 307);
+  return found;
+}
+static int
+match_BLOCKXYPARAMETER (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKXYPARAMETER *_obj = obj->tio.object->tio.BLOCKXYPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKXYPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKXYPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKXYPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKXYPARAMETER, prop2.connections[i].name, 302);
+    }
+  for (unsigned i = 0; i < _obj->prop3.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKXYPARAMETER, prop3.connections[i].name, 303);
+    }
+  for (unsigned i = 0; i < _obj->prop4.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKXYPARAMETER, prop4.connections[i].name, 304);
+    }
+  MATCH_OBJECT (BLOCKXYPARAMETER, x_label, 305);
+  MATCH_OBJECT (BLOCKXYPARAMETER, x_label_desc, 306);
+  MATCH_OBJECT (BLOCKXYPARAMETER, y_label, 307);
+  MATCH_OBJECT (BLOCKXYPARAMETER, y_label_desc, 308);
+  MATCH_OBJECT (BLOCKXYPARAMETER, x_value_set.desc, 410);
+  MATCH_OBJECT (BLOCKXYPARAMETER, y_value_set.desc, 309);
+  return found;
+}
+static int
+match_BLOCKVISIBILITYPARAMETER (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  Dwg_Object_BLOCKVISIBILITYPARAMETER *_obj = obj->tio.object->tio.BLOCKVISIBILITYPARAMETER;
+
+  if (_obj->evalexpr.value_code == 1)
+    {
+      MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, evalexpr.value.text1, 1);
+    }
+  MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, name, 1);
+  for (unsigned i = 0; i < _obj->prop1.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, prop1.connections[i].name, 301);
+    }
+  for (unsigned i = 0; i < _obj->prop2.num_connections; i++)
+    {
+      MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, prop2.connections[i].name, 302);
+    }
+  MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, blockvisi_name, 301);
+  MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, blockvisi_desc, 302);
+  for (unsigned i = 0; i < _obj->num_states; i++)
+    {
+      MATCH_OBJECT (BLOCKVISIBILITYPARAMETER, states[i].name, 303);
+    }
+  return found;
+}
+static int
+match_NAVISWORKSMODELDEF (const char *restrict filename,
+                          const Dwg_Object *restrict obj)
+{
+  char *text;
+  int found = 0;
+  MATCH_OBJECT (NAVISWORKSMODELDEF, path, 1);
+  return found;
+}
+
+static int
+match_OBJECTS (const char *restrict filename, Dwg_Data *restrict dwg)
+{
+  int found = 0;
+  char *text;
+
+  if (!dwg)
+    return 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; i++)
+    {
+      const Dwg_Object *obj = &dwg->object[i];
+      if (obj->supertype != DWG_SUPERTYPE_OBJECT)
+        continue;
+      if (obj->type == DWG_TYPE_BLOCK_HEADER) // processed later, --tables finds BLOCK
+        continue;
+      if (numtype) // search for allowed --type and skip if not
+        {
+          int typeok = 0;
+          for (int j = 0; j < numtype; j++)
+            {
+              if (obj->dxfname && !strcmp (type[j], obj->dxfname))
+                {
+                  typeok = 1;
+                  break;
+                }
+            }
+          if (!typeok) // next obj
+            continue;
+        }
+
+#define ELSEMATCH(OBJECT)                                               \
+  else if (obj->fixedtype == DWG_TYPE_##OBJECT)                         \
+    found += match_##OBJECT (filename, obj);
+
+      if (obj->type == DWG_TYPE_LAYER)
+        found += match_LAYER (filename, obj);
+      ELSEMATCH (LTYPE)
+      ELSEMATCH (STYLE)
+      ELSEMATCH (VIEW)
+      ELSEMATCH (VPORT)
+      ELSEMATCH (DIMSTYLE)
+      ELSEMATCH (UCS)
+      ELSEMATCH (VX_TABLE_RECORD)
+      if (opt_tables)
+        continue;
+
+      if (obj->fixedtype == DWG_TYPE_DICTIONARY
+          || obj->fixedtype == DWG_TYPE_DICTIONARYWDFLT)
+        found += match_DICTIONARY (filename, obj);
+      ELSEMATCH (GROUP)
+      ELSEMATCH (MLINESTYLE)
+      ELSEMATCH (DICTIONARYVAR)
+      ELSEMATCH (IMAGEDEF)
+      ELSEMATCH (LAYER_INDEX)
+      ELSEMATCH (LAYOUT)
+      ELSEMATCH (PLOTSETTINGS)
+      ELSEMATCH (SCALE)
+      ELSEMATCH (FIELD)
+      ELSEMATCH (TABLECONTENT)
+      ELSEMATCH (GEODATA)
+      ELSEMATCH (UNDERLAYDEFINITION)
+      ELSEMATCH (VISUALSTYLE)
+      ELSEMATCH (TABLESTYLE)
+      ELSEMATCH (SUNSTUDY)
+      ELSEMATCH (LIGHTLIST)
+      ELSEMATCH (DBCOLOR)
+      ELSEMATCH (MATERIAL)
+      ELSEMATCH (DIMASSOC)
+      ELSEMATCH (ASSOCOSNAPPOINTREFACTIONPARAM)
+      ELSEMATCH (ASSOCACTIONPARAM)
+      ELSEMATCH (ASSOCEDGEACTIONPARAM)
+      ELSEMATCH (ASSOCFACEACTIONPARAM)
+      ELSEMATCH (ASSOCOBJECTACTIONPARAM)
+      ELSEMATCH (ASSOCPATHACTIONPARAM)
+      ELSEMATCH (ASSOCVERTEXACTIONPARAM)
+      ELSEMATCH (ASSOCPATCHSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCPLANESURFACEACTIONBODY)
+      ELSEMATCH (ASSOCEXTENDSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCEXTRUDEDSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCFILLETSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCLOFTEDSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCNETWORKSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCOFFSETSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCREVOLVEDSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCSWEPTSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCTRIMSURFACEACTIONBODY)
+      ELSEMATCH (ASSOCMLEADERACTIONBODY)
+      ELSEMATCH (ASSOC3POINTANGULARDIMACTIONBODY)
+      ELSEMATCH (ASSOCALIGNEDDIMACTIONBODY)
+      ELSEMATCH (ASSOCORDINATEDIMACTIONBODY)
+      ELSEMATCH (ASSOCROTATEDDIMACTIONBODY)
+      ELSEMATCH (BLOCKPARAMDEPENDENCYBODY)
+      ELSEMATCH (BLOCKBASEPOINTPARAMETER)
+      ELSEMATCH (BLOCKFLIPPARAMETER)
+      ELSEMATCH (BLOCKLINEARPARAMETER)
+      ELSEMATCH (BLOCKROTATIONPARAMETER)
+      ELSEMATCH (BLOCKXYPARAMETER)
+      ELSEMATCH (BLOCKVISIBILITYPARAMETER)
+      ELSEMATCH (BLOCKMOVEACTION)
+      ELSEMATCH (BLOCKSTRETCHACTION)
+      ELSEMATCH (BLOCKROTATEACTION)
+      ELSEMATCH (BLOCKVISIBILITYGRIP)
+      ELSEMATCH (BLOCKGRIPLOCATIONCOMPONENT)
+      ELSEMATCH (NAVISWORKSMODELDEF)
+    }
+  return found;
+}
+
+static int
+match_BLOCK_HEADER (const char *restrict filename,
+                    Dwg_Object_Ref *restrict ref)
+{
+  int found = 0;
+  const Dwg_Object *hdr;
+  const Dwg_Object *obj;
+  char *text;
+
+  if (!ref)
+    return 0;
+  obj = hdr = ref->obj;
+  if (!hdr || hdr->supertype != DWG_SUPERTYPE_OBJECT
+      || hdr->type != DWG_TYPE_BLOCK_HEADER)
+    return 0;
+
+  MATCH_OBJECT (BLOCK_HEADER, name, 2);
+  if (opt_tables)
+    return found;
+  MATCH_OBJECT (BLOCK_HEADER, xref_pname, 1);
+  MATCH_OBJECT (BLOCK_HEADER, description, 4);
+
+  if (verbose)
+    fprintf(stderr, "HDR: %d, HANDLE: %lX\n", hdr->index, hdr->handle.value);
+  for (obj = get_first_owned_entity (hdr); obj;
+       obj = get_next_owned_entity (hdr, obj)) // without subentities
+    {
+      if (!obj)
+        break;
+      if (verbose)
+        fprintf(stderr, "%s [%d], HANDLE: %lX\n", obj->name, obj->index, obj->handle.value);
+      if (numtype) // search for allowed --type and skip if not
+        {
+          int typeok = 0;
+          for (int i = 0; i < numtype; i++)
+            {
+              if (obj->dxfname && !strcmp (type[i], obj->dxfname))
+                {
+                  typeok = 1;
+                  break;
+                }
+            }
+          if (!typeok) // next obj
+            continue;
+        }
+
+      if (obj->type == DWG_TYPE_TEXT)
+        found += match_TEXT (filename, obj);
+#ifdef WITH_SUBENTS
+      ELSEMATCH (ATTRIB)
+#endif
+      ELSEMATCH (ATTDEF)
+      ELSEMATCH (MTEXT)
+      ELSEMATCH (ATEXT)
+      else if (obj->type == DWG_TYPE_INSERT)
+        {
+#ifndef WITH_SUBENTS
+          const Dwg_Data *dwg = obj->parent;
+          Dwg_Entity_INSERT *_obj = obj->tio.entity->tio.INSERT;
+          if (_obj->has_attribs)
+            {
+              if (dwg->header.version >= R_13 && dwg->header.version <= R_2000)
+                {
+                  Dwg_Object *last_attrib = _obj->last_attrib->obj;
+                  Dwg_Object *o
+                      = _obj->first_attrib ? _obj->first_attrib->obj : NULL;
+                  while (o && o->type == DWG_TYPE_ATTRIB)
+                    {
+                      found += match_ATTRIB (filename, o);
+                      o = dwg_next_entity (o);
+                      if (o == last_attrib)
+                        break;
+                    }
+                }
+              else if (dwg->header.version >= R_2004)
+                {
+                  Dwg_Object *o;
+                  for (BITCODE_BL j = 0; j < _obj->num_owned; j++)
+                    {
+                      o = _obj->attribs[j]
+                              ? _obj->attribs[j]->obj
+                              : NULL;
+                      if (o && o->type == DWG_TYPE_ATTRIB)
+                        found += match_ATTRIB (filename, o);
+                    }
+                }
+            }
+#endif
+        }
+      else if (obj->type == DWG_TYPE_MINSERT)
+        {
+#ifndef WITH_SUBENTS
+          const Dwg_Data *dwg = obj->parent;
+          Dwg_Entity_MINSERT *_obj = obj->tio.entity->tio.MINSERT;
+          if (_obj->has_attribs)
+            {
+              if (dwg->header.version >= R_13 && dwg->header.version <= R_2000)
+                {
+                  Dwg_Object *last_attrib = _obj->last_attrib->obj;
+                  Dwg_Object *o
+                      = _obj->first_attrib ? _obj->first_attrib->obj : NULL;
+                  while (o && o->type == DWG_TYPE_ATTRIB)
+                    {
+                      found += match_ATTRIB (filename, o);
+                      o = dwg_next_entity (o);
+                      if (o == last_attrib)
+                        break;
+                    }
+                }
+              else if (dwg->header.version >= R_2004)
+                {
+                  Dwg_Object *o;
+                  for (BITCODE_BL j = 0; j < _obj->num_owned; j++)
+                    {
+                      o = _obj->attribs[j]
+                              ? _obj->attribs[j]->obj
+                              : NULL;
+                      if (o && o->type == DWG_TYPE_ATTRIB)
+                        found += match_ATTRIB (filename, o);
+                    }
+                }
+            }
+#endif
+        }
+      if (!opt_text)
+        {
+          if (obj->type == DWG_TYPE_DIMENSION_ORDINATE
+              || obj->type == DWG_TYPE_DIMENSION_LINEAR
+              || obj->type == DWG_TYPE_DIMENSION_ALIGNED
+              || obj->type == DWG_TYPE_DIMENSION_ANG3PT
+              || obj->type == DWG_TYPE_DIMENSION_ANG2LN
+              || obj->type == DWG_TYPE_DIMENSION_RADIUS
+              || obj->type == DWG_TYPE_DIMENSION_DIAMETER)
+            found += match_DIMENSION (filename, obj);
+          ELSEMATCH (VIEWPORT)
+          else if (obj->type == DWG_TYPE__3DSOLID || obj->type == DWG_TYPE_BODY
+                   || obj->type == DWG_TYPE_REGION)
+            found += match_3DSOLID (filename, obj);
+
+          ELSEMATCH (BLOCK)
+          ELSEMATCH (HATCH)
+          ELSEMATCH (TOLERANCE)
+          ELSEMATCH (TABLE)
+          ELSEMATCH (GEOPOSITIONMARKER)
+          ELSEMATCH (LEADER)
+          ELSEMATCH (MULTILEADER)
+          ELSEMATCH (LIGHT)
+        }
+
+      if (!opt_text)
+        {
+          // common entity names
+          MATCH_TABLE (ENTITY, layer, LAYER, 8);
+          MATCH_TABLE (ENTITY, ltype, LTYPE, 8);
+          if (obj->parent->header.version >= R_2000)
+            {
+              MATCH_TABLE (ENTITY, plotstyle, PLOTSTYLE, 8);
+            }
+          if (obj->parent->header.version >= R_2007)
+            {
+              MATCH_TABLE (ENTITY, material, MATERIAL, 8);
+              MATCH_TABLE (ENTITY, shadow, DICTIONARY, 8);
+            }
+          if (obj->parent->header.version >= R_2010)
+            {
+              MATCH_TABLE (ENTITY, full_visualstyle, VISUALSTYLE, 8);
+              MATCH_TABLE (ENTITY, face_visualstyle, VISUALSTYLE, 8);
+              MATCH_TABLE (ENTITY, edge_visualstyle, VISUALSTYLE, 8);
+            }
+        }
+    }
+  return found;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int error = 0;
+  int i = 1, j;
+  char *filename;
+  Dwg_Data dwg;
+  int plen;
+  int errcode;
+#ifdef HAVE_PCRE2_H
+  PCRE2_SIZE erroffset;
+  int have_jit;
+#  ifdef HAVE_PCRE2_16
+  BITCODE_TU pattern16;
+#  endif
+#endif
+  int opt_recurse = 0;
+  int count = 0;
+  int c;
+#ifdef HAVE_GETOPT_LONG
+  int option_index = 0;
+  static struct option long_options[]
+      = { { "case", 0, 0, 'i' },      { "extended", 0, 0, 'x' },
+          { "count", 0, 0, 'c' },     { "no-filename", 0, 0, 'h' },
+          { "recursive", 0, 0, 'r' }, { "recursive", 0, 0, 'R' },
+          { "type", 1, 0, 'y' },      { "dxf", 1, 0, 'd' },
+          { "text", 0, 0, 't' },      { "blocks", 0, 0, 'b' },
+          { "tables", 0, 0, 0 },
+          { "help", 0, 0, 0 },        { "version", 0, 0, 0 },
+          { NULL, 0, NULL, 0 } };
+#endif
+
+  // check args
+  if (argc < 2)
+    return usage ();
+  memset (dxf, 0, 10 * sizeof (short));
+
+  while
+#ifdef HAVE_GETOPT_LONG
+      ((c = getopt_long (argc, argv, "ixchrRy:d:tb", long_options,
+                         &option_index))
+       != -1)
+#else
+      ((c = getopt (argc, argv, "ixchrRy:d:tbvu")) != -1)
+#endif
+    {
+      if (c == -1)
+        break;
+      switch (c)
+        {
+#ifdef HAVE_GETOPT_LONG
+        case 0:
+          if (!strcmp (long_options[option_index].name, "help"))
+            return help ();
+          if (!strcmp (long_options[option_index].name, "version"))
+            return opt_version ();
+          if (!strcmp (long_options[option_index].name, "tables"))
+            opt_tables = 1;
+          break;
+#else
+        case 'v':
+          return opt_version ();
+#endif
+#ifdef HAVE_PCRE2_H
+        case 'x':
+          options |= PCRE2_EXTENDED;
+          break;
+#endif
+        case 'i':
+          options |= PCRE2_CASELESS;
+          break;
+        case 'c':
+          opt_count = 1;
+          break;
+        case 'h':
+          opt_filename = 0;
+          break;
+        case 'r':
+        case 'R':
+          opt_recurse = 1;
+          break;
+        case 't':
+          opt_text = 1;
+          break;
+        case 'b':
+          opt_blocks = 1;
+          break;
+        case 'y':
+          if (numtype >= 10)
+            return usage ();        // too many
+          type[numtype++] = optarg; // a string
+          break;
+        case 'd':
+          if (numdxf >= 10)
+            return usage (); // too many
+          // a integer group
+          dxf[numdxf++] = (short)strtol (optarg, NULL, 10);
+          break;
+
+        case 'u':
+          return help ();
+        case '?':
+          fprintf (stderr, "%s: invalid option '-%c' ignored\n", argv[0],
+                   optopt);
+          break;
+        default:
+          return usage ();
+        }
+    }
+  i = optind;
+  if (i > argc - 2) // need 2 more args. TODO: unless -R given
+    return usage ();
+
+  pattern = argv[i];
+  plen = strlen (pattern);
+#ifdef HAVE_PCRE2_H
+  pcre2_config_8 (PCRE2_CONFIG_JIT, &have_jit);
+  ri8 = pcre2_compile_8 ((PCRE2_SPTR8)pattern, plen, /* pattern */
+                         options,                    /* options */
+                         &errcode,                   /* errors */
+                         &erroffset,                 /* error offset */
+#  ifdef USE_MATCH_CONTEXT
+                         compile_context
+#  else
+                         NULL
+#  endif
+  );
+  if (errcode != 0 && errcode != 100)
+    {
+      pcre2_get_error_message_8 (errcode, (PCRE2_UCHAR8 *)buf, 4096);
+      LOG_ERROR ("pcre2_compile_8 error %d: %s with %s", errcode, buf,
+                 pattern);
+      return 1;
+    }
+  match_data8 = pcre2_match_data_create_from_pattern_8 (ri8, NULL);
+  if (have_jit)
+    pcre2_jit_compile_8 (ri8, PCRE2_JIT_COMPILE_OPTIONS);
+
+#  ifdef HAVE_PCRE2_16
+  pcre2_config_16 (PCRE2_CONFIG_JIT, &have_jit);
+  pattern16 = bit_utf8_to_TU (pattern);
+  ri16 = pcre2_compile_16 ((PCRE2_SPTR16)pattern16, plen, /* pattern */
+                           options,                       /* options */
+                           &errcode,                      /* errors */
+                           &erroffset,                    /* error offset */
+#    ifdef USE_MATCH_CONTEXT
+                           compile_context
+#    else
+                           NULL
+#    endif
+  );
+  free (pattern16);
+  if (errcode != 0 && errcode != 100)
+    {
+      pcre2_get_error_message_8 (errcode, (PCRE2_UCHAR8 *)buf, 4096);
+      LOG_ERROR ("pcre2_compile_16 error %d: %s with %s", errcode, buf,
+                 pattern);
+      return 1;
+    }
+  match_data16 = pcre2_match_data_create_from_pattern_16 (ri16, NULL);
+  if (have_jit)
+    pcre2_jit_compile_16 (ri16, PCRE2_JIT_COMPILE_OPTIONS);
+#  endif
+#endif
+
+  // for all filenames...
+  for (j = i + 1; j < argc; j++)
+    {
+      filename = argv[j];
+      memset (&dwg, 0, sizeof (Dwg_Data));
+      dwg.opts = 0;
+      error = dwg_read_file (filename, &dwg);
+      if (error > DWG_ERR_CRITICAL)
+        {
+          fprintf (stderr, "Error: Could not read DWG file %s, error: 0x%x\n",
+                   filename, error);
+          continue;
+        }
+
+      if (!opt_text)
+        count += match_OBJECTS (filename, &dwg);
+      if (!opt_tables)
+        count += match_BLOCK_HEADER (filename, dwg_model_space_ref (&dwg));
+      if (opt_blocks)
+        {
+          for (long k = 0; k < dwg.block_control.num_entries; k++)
+            {
+              count += match_BLOCK_HEADER (filename, dwg.block_control.entries[k]);
+            }
+        }
+      if (!opt_tables)
+        count += match_BLOCK_HEADER (filename, dwg_paper_space_ref (&dwg));
+
+      fflush (stdout);
+      if (j < argc)
+        dwg_free (&dwg); // skip the last free
+    }
+  if (opt_count)
+    printf ("%d\n", count);
+
+  return count ? 0 : 1;
+}
+\n[end of programs/dwggrep.c]\n[start of programs/dwgbmp.c]\nprograms/dwgbmp.c
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2009, 2018, 2019 Free Software Foundation, Inc.            */
+/*  Copyright (C) 2010 Thien-Thi Nguyen                                      */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * dwgbmp.c: get the bmp thumbnail in a dwg file.
+ * not the WMF.
+ * written by Felipe Castro
+ * modified by Felipe Corrêa da Silva Sances
+ * modified by Rodrigo Rodrigues da Silva
+ * modified by Thien-Thi Nguyen
+ * modified by Reini Urban
+ */
+
+#include "../src/config.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <getopt.h>
+#ifdef HAVE_VALGRIND_VALGRIND_H
+#  include <valgrind/valgrind.h>
+#endif
+
+#include <dwg.h>
+#include "common.h"
+#include "suffix.inc"
+
+static int opts = 0;
+static int force_free = 0;
+
+static int
+usage (void)
+{
+  printf ("\nUsage: dwgbmp [-v[0-9]] DWGFILE [BMPFILE]\n");
+  return 1;
+}
+static int
+opt_version (void)
+{
+  printf ("dwgbmp %s\n", PACKAGE_VERSION);
+  return 0;
+}
+static int
+help (void)
+{
+  printf ("\nUsage: dwgbmp [OPTION]... DWGFILE [BMPFILE]\n");
+  printf ("Extract the DWG thumbnail image as BMP.\n");
+  printf ("Default BMPFILE: DWGFILE with .bmp extension.\n"
+          "\n");
+#ifdef HAVE_GETOPT_LONG
+  printf ("  -v[0-9], --verbose [0-9]  verbosity\n");
+  printf ("           --help           display this help and exit\n");
+  printf ("           --version        output version information and exit\n"
+          "\n");
+#else
+  printf ("  -v[0-9]     verbosity\n");
+  printf ("  -h          display this help and exit\n");
+  printf ("  -i          output version information and exit\n"
+          "\n");
+#endif
+  printf ("GNU LibreDWG online manual: "
+          "<https://www.gnu.org/software/libredwg/>\n");
+  return 0;
+}
+
+static void
+bmp_free_dwg (Dwg_Data *dwg)
+{
+#if defined __SANITIZE_ADDRESS__ || __has_feature(address_sanitizer)
+  {
+    char *asanenv = getenv("ASAN_OPTIONS");
+    if (!asanenv)
+      force_free = 1;
+    // detect_leaks is enabled by default. see if it's turned off
+    else if (strstr (asanenv, "detect_leaks=0") == NULL) /* not found */
+      force_free = 1;
+  }
+#endif
+  // really huge DWG's need endlessly here.
+  if ((dwg->header.version && dwg->num_objects < 1000)
+      || force_free
+#ifdef HAVE_VALGRIND_VALGRIND_H
+      || (RUNNING_ON_VALGRIND)
+#endif
+  )
+    dwg_free (dwg);
+}
+
+#pragma pack(1)
+
+static int
+get_bmp (char *dwgfile, char *bmpfile)
+{
+  unsigned char *data;
+  int error;
+  BITCODE_RL size;
+  size_t retval;
+  FILE *fh;
+  Dwg_Data dwg;
+  struct _BITMAP_HEADER
+  {
+    char magic[2];
+    BITCODE_RL file_size;
+    BITCODE_RL reserved;
+    BITCODE_RL offset;
+  } bmp_h;
+
+  memset (&dwg, 0, sizeof (Dwg_Data));
+  dwg.opts = opts;
+  /* Read dwg data */
+  error = dwg_read_file (dwgfile, &dwg);
+  if (error >= DWG_ERR_CRITICAL)
+    {
+      fprintf (stderr, "Unable to read file %s. ERROR 0x%x\n", dwgfile, error);
+      bmp_free_dwg (&dwg);
+      return error;
+    }
+
+  /* Get DIB bitmap data */
+  data = dwg_bmp (&dwg, &size);
+  if (!data)
+    {
+      fprintf (stderr, "No thumbnail bmp image in %s\n", dwgfile);
+      bmp_free_dwg (&dwg);
+      return 0;
+    }
+  if (size < 1)
+    {
+      fprintf (stderr, "Empty thumbnail data in %s\n", dwgfile);
+      bmp_free_dwg (&dwg);
+      return -3;
+    }
+  if (size > dwg.thumbnail.size)
+    {
+      fprintf (stderr,
+               "Invalid thumbnail data in %s,"
+               " size " FORMAT_RL " > %lu\n",
+               dwgfile, size, dwg.thumbnail.size);
+      bmp_free_dwg (&dwg);
+      return -3;
+    }
+
+  fh = fopen (bmpfile, "w");
+  if (!fh)
+    {
+      fprintf (stderr, "Unable to write BMP file '%s'\n", bmpfile);
+      bmp_free_dwg (&dwg);
+      return -4;
+    }
+
+  /* Write bmp file header */
+  bmp_h.magic[0] = 'B';
+  bmp_h.magic[1] = 'M';
+  bmp_h.file_size = 14 + size; // file header + DIB data
+  bmp_h.reserved = 0;
+  bmp_h.offset = 14 + 40 + 4 * 256; // file header + DIB header + color table
+  retval = fwrite (&bmp_h.magic[0], sizeof (char), 2, fh);
+  if (!retval)
+    {
+      bmp_free_dwg (&dwg);
+      perror ("writing BMP magic");
+      return 1;
+    }
+  retval = fwrite (&bmp_h.file_size, 4, 3, fh);
+  if (!retval)
+    {
+      bmp_free_dwg (&dwg);
+      perror ("writing BMP file_size");
+      return 1;
+    }
+
+  /* Write data (DIB header + bitmap) */
+  retval = fwrite (data, sizeof (char), size, fh);
+  if (!retval)
+    {
+      bmp_free_dwg (&dwg);
+      perror ("writing BMP header");
+      return 1;
+    }
+  fclose (fh);
+
+  printf ("Success. Written thumbnail image to '%s'\n", bmpfile);
+  bmp_free_dwg (&dwg);
+
+  return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int i = 1, error;
+  char *dwgfile, *bmpfile;
+  int c;
+#ifdef HAVE_GETOPT_LONG
+  int option_index = 0;
+  static struct option long_options[]
+      = { { "verbose", 1, &opts, 1 }, // optional
+          { "help", 0, 0, 0 },
+          { "version", 0, 0, 0 },
+          { "force-free", 0, 0, 0 },
+          { NULL, 0, NULL, 0 } };
+#endif
+
+  if (argc < 2)
+    return usage ();
+
+  while
+#ifdef HAVE_GETOPT_LONG
+      ((c = getopt_long (argc, argv, ":v::h", long_options, &option_index))
+       != -1)
+#else
+      ((c = getopt (argc, argv, ":v::hi")) != -1)
+#endif
+    {
+      if (c == -1)
+        break;
+      switch (c)
+        {
+        case ':': // missing arg
+          if (optarg && !strcmp (optarg, "v"))
+            {
+              opts = 1;
+              break;
+            }
+          fprintf (stderr, "%s: option '-%c' requires an argument\n", argv[0],
+                   optopt);
+          break;
+#ifdef HAVE_GETOPT_LONG
+        case 0:
+          /* This option sets a flag */
+          if (!strcmp (long_options[option_index].name, "verbose"))
+            {
+              if (opts < 0 || opts > 9)
+                return usage ();
+#  if defined(USE_TRACING) && defined(HAVE_SETENV)
+              {
+                char v[2];
+                *v = opts + '0';
+                *(v + 1) = 0;
+                setenv ("LIBREDWG_TRACE", v, 1);
+              }
+#  endif
+              break;
+            }
+          if (!strcmp (long_options[option_index].name, "version"))
+            return opt_version ();
+          if (!strcmp (long_options[option_index].name, "help"))
+            return help ();
+          if (!strcmp (long_options[option_index].name, "force-free"))
+            force_free = 1;
+          break;
+#else
+        case 'i':
+          return opt_version ();
+#endif
+        case 'v': // support -v3 and -v
+          i = (optind > 0 && optind < argc) ? optind - 1 : 1;
+          if (!memcmp (argv[i], "-v", 2))
+            {
+              opts = argv[i][2] ? argv[i][2] - '0' : 1;
+            }
+          if (opts < 0 || opts > 9)
+            return usage ();
+#if defined(USE_TRACING) && defined(HAVE_SETENV)
+          {
+            char v[2];
+            *v = opts + '0';
+            *(v + 1) = 0;
+            setenv ("LIBREDWG_TRACE", v, 1);
+          }
+#endif
+          break;
+        case 'h':
+          return help ();
+        case '?':
+          fprintf (stderr, "%s: invalid option '-%c' ignored\n", argv[0],
+                   optopt);
+          break;
+        default:
+          return usage ();
+        }
+    }
+  i = optind;
+  if (i >= argc)
+    return usage ();
+
+  dwgfile = argv[i];
+  if (i == argc - 2)
+    bmpfile = argv[i + 1];
+  else
+    bmpfile = suffix (dwgfile, "bmp");
+  error = get_bmp (dwgfile, bmpfile);
+  if (i != argc - 2)
+    free (bmpfile);
+  return error;
+}
+\n[end of programs/dwgbmp.c]\n[start of programs/dwgread.c]\nprograms/dwgread.c
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2009-2020 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2010 Thien-Thi Nguyen                                      */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * dwgread.c: read a DWG file, print verbose logging, and output to
+ *            various formats.
+ * written by Felipe Castro
+ * modified by Felipe Corrêa da Silva Sances
+ * modified by Rodrigo Rodrigues da Silva
+ * modified by Thien-Thi Nguyen
+ * modified by Reini Urban
+ */
+
+#include "../src/config.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+// strings.h or string.h
+#ifdef AX_STRCASECMP_HEADER
+#  include AX_STRCASECMP_HEADER
+#endif
+#include <getopt.h>
+#ifdef HAVE_VALGRIND_VALGRIND_H
+#  include <valgrind/valgrind.h>
+#endif
+
+#include "dwg.h"
+#include "common.h"
+#include "out_json.h"
+#include "out_dxf.h"
+
+static int opts = 1;
+
+static int
+usage (void)
+{
+  printf ("\nUsage: dwgread [-v[0-9]] [-O FMT] [-o OUTFILE] [DWGFILE|-]\n");
+  return 1;
+}
+static int
+opt_version (void)
+{
+  printf ("dwgread %s\n", PACKAGE_VERSION);
+  return 0;
+}
+static int
+help (void)
+{
+  printf ("\nUsage: dwgread [OPTION]... DWGFILE\n");
+  printf ("Reads the DWG into some optional output format to stdout or some "
+          "file,\n"
+          "and prints error, success or verbose internal progress to stderr.\n"
+          "\n");
+#ifdef HAVE_GETOPT_LONG
+  printf ("  -v[0-9], --verbose [0-9]  verbosity\n");
+  printf ("  -O fmt,  --format fmt     fmt: DXF, DXFB, JSON, GeoJSON\n");
+  printf ("           Planned output formats:  YAML, XML/OGR, GPX, SVG, PS\n");
+  printf ("  -o outfile                also defines the output fmt. Default: "
+          "stdout\n");
+  printf ("           --help           display this help and exit\n");
+  printf ("           --version        output version information and exit\n"
+          "\n");
+#else
+  printf ("  -v[0-9]     verbosity\n");
+  printf ("  -O fmt      fmt: DXF, DXFB, JSON, GeoJSON\n");
+  printf ("              Planned output formats:  YAML, XML/OGR, GPX, SVG, PS\n");
+  printf ("  -o outfile  also defines the output fmt. Default: stdout\n");
+  printf ("  -h          display this help and exit\n");
+  printf ("  -i          output version information and exit\n"
+          "\n");
+#endif
+  printf ("GNU LibreDWG online manual: "
+          "<https://www.gnu.org/software/libredwg/>\n");
+  return 0;
+}
+
+int
+main (int argc, char *argv[])
+{
+  int i = 1;
+  int error;
+  Dwg_Data dwg;
+  const char *fmt = NULL;
+  const char *outfile = NULL;
+  int has_v = 0;
+  int force_free = 0;
+  int c;
+#ifdef HAVE_GETOPT_LONG
+  int option_index = 0;
+  static struct option long_options[]
+      = { { "verbose", 1, &opts, 1 }, // optional
+          { "format", 1, 0, 'O' },    { "file", 1, 0, 'o' },
+          { "help", 0, 0, 0 },        { "version", 0, 0, 0 },
+          { "force-free", 0, 0, 0 },
+          { NULL, 0, NULL, 0 } };
+#endif
+
+  if (argc < 2)
+    return usage ();
+
+  while
+#ifdef HAVE_GETOPT_LONG
+      ((c = getopt_long (argc, argv, ":v::O:o:h", long_options, &option_index))
+       != -1)
+#else
+      ((c = getopt (argc, argv, ":v::O:o:hi")) != -1)
+#endif
+    {
+      if (c == -1)
+        break;
+      switch (c)
+        {
+        case ':': // missing arg
+          if (optarg && !strcmp (optarg, "v"))
+            {
+              opts = 1;
+              has_v = 1;
+              break;
+            }
+          fprintf (stderr, "%s: option '-%c' requires an argument\n", argv[0],
+                   optopt);
+          break;
+#ifdef HAVE_GETOPT_LONG
+        case 0:
+          /* This option sets a flag */
+          if (!strcmp (long_options[option_index].name, "verbose"))
+            {
+              if (opts < 0 || opts > 9)
+                return usage ();
+#  if defined(USE_TRACING) && defined(HAVE_SETENV)
+              {
+                char v[2];
+                *v = opts + '0';
+                *(v + 1) = 0;
+                setenv ("LIBREDWG_TRACE", v, 1);
+              }
+#  endif
+              has_v = 1;
+              break;
+            }
+          if (!strcmp (long_options[option_index].name, "version"))
+            return opt_version ();
+          if (!strcmp (long_options[option_index].name, "help"))
+            return help ();
+          if (!strcmp (long_options[option_index].name, "force-free"))
+            force_free = 1;
+          break;
+#else
+        case 'i':
+          return opt_version ();
+#endif
+        case 'O':
+          fmt = optarg;
+          break;
+        case 'o':
+          outfile = optarg;
+          if (!fmt && outfile != NULL)
+            {
+#ifndef DISABLE_DXF
+              if (strstr (outfile, ".json") || strstr (outfile, ".JSON"))
+                fmt = (char *)"json";
+              else if (strstr (outfile, ".dxf") || strstr (outfile, ".DXF"))
+                fmt = (char *)"dxf";
+              else if (strstr (outfile, ".dxfb") || strstr (outfile, ".DXFB"))
+                fmt = (char *)"dxfb";
+              else if (strstr (outfile, ".geojson")
+                       || strstr (outfile, ".GeoJSON"))
+                fmt = (char *)"geojson";
+              else
+#endif
+                fprintf (stderr, "Unknown output format for %s\n", outfile);
+            }
+          break;
+        case 'v': // support -v3 and -v
+          i = (optind > 0 && optind < argc) ? optind - 1 : 1;
+          if (!memcmp (argv[i], "-v", 2))
+            {
+              opts = argv[i][2] ? argv[i][2] - '0' : 1;
+            }
+          if (opts < 0 || opts > 9)
+            return usage ();
+#if defined(USE_TRACING) && defined(HAVE_SETENV)
+          {
+            char v[2];
+            *v = opts + '0';
+            *(v + 1) = 0;
+            setenv ("LIBREDWG_TRACE", v, 1);
+          }
+#endif
+          has_v = 1;
+          break;
+        case 'h':
+          return help ();
+        case '?':
+          fprintf (stderr, "%s: invalid option '-%c' ignored\n", argv[0],
+                   optopt);
+          break;
+        default:
+          return usage ();
+        }
+    }
+  i = optind;
+
+  memset (&dwg, 0, sizeof (Dwg_Data));
+  if (has_v || !fmt)
+    dwg.opts = opts;
+#if defined(USE_TRACING) && defined(HAVE_SETENV)
+  if (!has_v)
+    setenv ("LIBREDWG_TRACE", "1", 0);
+#endif
+
+  if (optind != argc)
+    {
+      if (opts > 1)
+        fprintf (stderr, "Reading DWG file %s\n", argv[i]);
+      error = dwg_read_file (argv[i], &dwg);
+    }
+  else
+    {
+      if (opts > 1)
+        fprintf (stderr, "Reading DWG from stdin\n");
+      error = dwg_read_file ("-", &dwg); // i.e. from stdin
+    }
+
+  if (error >= DWG_ERR_CRITICAL)
+    goto done;
+
+  if (fmt)
+    {
+      Bit_Chain dat = { 0 };
+      if (outfile)
+        dat.fh = fopen (outfile, "w");
+      else
+        dat.fh = stdout;
+      fprintf (stderr, "\n");
+      dat.version = dat.from_version = dwg.header.version;
+      // TODO --as-rNNNN version? for now not.
+      // we want the native dump, converters are separate.
+#ifndef DISABLE_DXF
+      if (!strcasecmp (fmt, "json"))
+        {
+          if (opts > 1 && outfile)
+            fprintf (stderr, "Writing JSON file %s\n", outfile);
+          error = dwg_write_json (&dat, &dwg);
+        }
+      else if (!strcasecmp (fmt, "dxfb"))
+        {
+          if (opts > 1 && outfile)
+            fprintf (stderr, "Writing Binary DXF file %s\n", outfile);
+          error = dwg_write_dxfb (&dat, &dwg);
+        }
+      else if (!strcasecmp (fmt, "dxf"))
+        {
+          if (opts > 1 && outfile)
+            fprintf (stderr, "Writing Binary DXF file %s\n", outfile);
+          error = dwg_write_dxf (&dat, &dwg);
+        }
+      else if (!strcasecmp (fmt, "geojson"))
+        {
+          if (opts > 1 && outfile)
+            fprintf (stderr, "Writing GeoJSON file %s\n", outfile);
+          error = dwg_write_geojson (&dat, &dwg);
+        }
+      else
+#endif
+        fprintf (stderr, "Invalid output format '%s'\n", fmt);
+
+      if (outfile)
+        fclose (dat.fh);
+    }
+
+ done:
+#if defined __SANITIZE_ADDRESS__ || __has_feature(address_sanitizer)
+  {
+    char *asanenv = getenv("ASAN_OPTIONS");
+    if (!asanenv)
+      force_free = 1;
+    // detect_leaks is enabled by default. see if it's turned off
+    else if (strstr (asanenv, "detect_leaks=0") == NULL) /* not found */
+      force_free = 1;
+  }
+#endif
+
+  // forget about valgrind. really huge DWG's need endlessly here.
+  if ((dwg.header.version && dwg.num_objects < 1000)
+      || force_free
+#ifdef HAVE_VALGRIND_VALGRIND_H
+      || (RUNNING_ON_VALGRIND)
+#endif
+  )
+    {
+      dwg_free (&dwg);
+    }
+
+  if (error >= DWG_ERR_CRITICAL)
+    {
+      fprintf (stderr, "ERROR 0x%x\n", error);
+      if (error && opts > 2)
+        dwg_errstrings (error);
+    }
+  else
+    {
+      if (opts > 1)
+        {
+          fprintf (stderr, "SUCCESS 0x%x\n", error);
+          if (error && opts > 2)
+            dwg_errstrings (error);
+        }
+      else
+        fprintf (stderr, "SUCCESS\n");
+    }
+
+  return error >= DWG_ERR_CRITICAL ? 1 : 0;
+}
+\n[end of programs/dwgread.c]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.

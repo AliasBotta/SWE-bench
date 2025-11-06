@@ -7,6 +7,7 @@ from argparse import ArgumentTypeError
 from git import Repo
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from pathlib import Path
 
 
 DIFF_PATTERN = re.compile(r"^diff(?:.*)")
@@ -19,6 +20,25 @@ PATCH_HUNK_PATTERN = re.compile(
     r"\@\@\s+\-(\d+),(\d+)\s+\+(\d+),(\d+)\s+\@\@(.+?)(?=diff\ |\-\-\-\ a\/|\@\@\ \-|\Z)",
     re.DOTALL,
 )
+
+ALLOWED_EXTENSIONS = {
+    # C++ / C
+    ".cpp", ".cc", ".cxx", ".hpp", ".h", ".hxx", ".c",
+    # Go
+    ".go",
+    # Rust
+    ".rs",
+    # Python
+    ".py", ".pyi",
+    # JavaScript / TypeScript
+    ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    # C#
+    ".cs", ".csproj",
+    # Java
+    ".java",
+    # General Documentation
+    # ".md", ".rst"
+}
 
 
 def get_first_idx(charlist):
@@ -265,16 +285,18 @@ def detect_encoding(filename):
     return chardet.detect(rawdata)["encoding"]
 
 
-def list_files(root_dir, include_tests=False):
+def list_files(root_dir, include_tests=True):
     files = []
-    for filename in Path(root_dir).rglob("*.py"):
+    for filename in Path(root_dir).rglob("*"):
+        if not filename.is_file() or filename.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
         if not include_tests and is_test(filename.as_posix()):
             continue
         files.append(filename.relative_to(root_dir).as_posix())
     return files
 
 
-def ingest_directory_contents(root_dir, include_tests=False):
+def ingest_directory_contents(root_dir, include_tests=True):
     files_content = {}
     for relative_path in list_files(root_dir, include_tests=include_tests):
         filename = os.path.join(root_dir, relative_path)

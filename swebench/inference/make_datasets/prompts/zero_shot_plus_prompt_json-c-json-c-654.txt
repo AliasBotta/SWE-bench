@@ -1,0 +1,2153 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+A stack-buffer-overflow in json_parse.c:89:44
+
+## System info
+
+Ubuntu X64, clang 6.0, json_parse (latest master [56a89f](https://github.com/json-c/json-c/commit/56a89f902f360c91a80ac0c7419d2ba1aa8e8634))
+
+## Configure
+
+cmake ..-DCMAKE_CXX_FLAGS="-fsanitize=address -g" -DCMAKE_C_FLAGS="-fsanitize=address -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" 
+
+## Command line
+
+./build/apps/json_parse -n ./stack-overflow-parseit-json_parse-89
+
+## AddressSanitizer output
+
+```
+=================================================================
+==12668==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7ffea9c409b0 at pc 0x00000051747b bp 0x7ffea9c388b0 sp 0x7ffea9c388a8
+READ of size 1 at 0x7ffea9c409b0 thread T0
+    #0 0x51747a in parseit /home/seviezhou/jsonc/apps/json_parse.c:89:44
+    #1 0x51747a in main /home/seviezhou/jsonc/apps/json_parse.c:182
+    #2 0x7fc02a77783f in __libc_start_main /build/glibc-e6zv40/glibc-2.23/csu/../csu/libc-start.c:291
+    #3 0x41a928 in _start (/home/seviezhou/jsonc/build/apps/json_parse+0x41a928)
+
+Address 0x7ffea9c409b0 is located in stack of thread T0 at offset 33008 in frame
+    #0 0x51651f in main /home/seviezhou/jsonc/apps/json_parse.c:159
+
+  This frame has 3 object(s):
+    [32, 176) 'rusage.i.i.i' (line 42)
+    [240, 33008) 'buf.i' (line 52) <== Memory access at offset 33008 overflows this variable
+    [33264, 33408) 'rusage.i' (line 42)
+HINT: this may be a false positive if your program uses some custom stack unwind mechanism or swapcontext
+      (longjmp and C++ exceptions *are* supported)
+SUMMARY: AddressSanitizer: stack-buffer-overflow /home/seviezhou/jsonc/apps/json_parse.c:89:44 in parseit
+Shadow bytes around the buggy address:
+  0x1000553800e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x1000553800f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x100055380100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x100055380110: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x100055380120: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x100055380130: 00 00 00 00 00 00[f2]f2 f2 f2 f2 f2 f2 f2 f2 f2
+  0x100055380140: f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2 f2
+  0x100055380150: f2 f2 f2 f2 f2 f2 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+  0x100055380160: f8 f8 f8 f8 f8 f8 f8 f8 f3 f3 f3 f3 f3 f3 f3 f3
+  0x100055380170: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x100055380180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==12668==ABORTING
+```
+
+## POC
+
+[stack-overflow-parseit-json_parse-89.zip](https://github.com/json-c/json-c/files/5025755/stack-overflow-parseit-json_parse-89.zip)
+</issue>
+
+<code>
+[start of math_compat.h]\nmath_compat.h
+#ifndef __math_compat_h
+#define __math_compat_h
+
+/**
+ * @file
+ * @brief Do not use, json-c internal, may be changed or removed at any time.
+ */
+
+/* Define isnan, isinf, infinity and nan on Windows/MSVC */
+
+#ifndef HAVE_DECL_ISNAN
+#ifdef HAVE_DECL__ISNAN
+#include <float.h>
+#define isnan(x) _isnan(x)
+#else
+/* On platforms like AIX and "IBM i" we need to provide our own isnan */
+#define isnan(x) ((x) != (x))
+#endif
+#endif
+
+#ifndef HAVE_DECL_ISINF
+#ifdef HAVE_DECL__FINITE
+#include <float.h>
+#define isinf(x) (!_finite(x))
+#else
+#include <float.h>
+/* On platforms like AIX and "IBM i" we need to provide our own isinf */
+#define isinf(x) ((x) < -DBL_MAX || (x) > DBL_MAX)
+#endif
+#endif
+
+#ifndef HAVE_DECL_INFINITY
+#include <float.h>
+#define INFINITY (DBL_MAX + DBL_MAX)
+#define HAVE_DECL_INFINITY
+#endif
+
+#ifndef HAVE_DECL_NAN
+#define NAN (INFINITY - INFINITY)
+#define HAVE_DECL_NAN
+#endif
+
+#endif
+\n[end of math_compat.h]\n[start of json_tokener.h]\njson_tokener.h
+/*
+ * $Id: json_tokener.h,v 1.10 2006/07/25 03:24:50 mclark Exp $
+ *
+ * Copyright (c) 2004, 2005 Metaparadigm Pte. Ltd.
+ * Michael Clark <michael@metaparadigm.com>
+ *
+ * This library is free software; you can redistribute it and/or modify
+ * it under the terms of the MIT license. See COPYING for details.
+ *
+ */
+
+/**
+ * @file
+ * @brief Methods to parse an input string into a tree of json_object objects.
+ */
+#ifndef _json_tokener_h_
+#define _json_tokener_h_
+
+#include "json_object.h"
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum json_tokener_error
+{
+	json_tokener_success,
+	json_tokener_continue,
+	json_tokener_error_depth,
+	json_tokener_error_parse_eof,
+	json_tokener_error_parse_unexpected,
+	json_tokener_error_parse_null,
+	json_tokener_error_parse_boolean,
+	json_tokener_error_parse_number,
+	json_tokener_error_parse_array,
+	json_tokener_error_parse_object_key_name,
+	json_tokener_error_parse_object_key_sep,
+	json_tokener_error_parse_object_value_sep,
+	json_tokener_error_parse_string,
+	json_tokener_error_parse_comment,
+	json_tokener_error_parse_utf8_string,
+	json_tokener_error_size
+};
+
+/**
+ * @deprecated Don't use this outside of json_tokener.c, it will be made private in a future release.
+ */
+enum json_tokener_state
+{
+	json_tokener_state_eatws,
+	json_tokener_state_start,
+	json_tokener_state_finish,
+	json_tokener_state_null,
+	json_tokener_state_comment_start,
+	json_tokener_state_comment,
+	json_tokener_state_comment_eol,
+	json_tokener_state_comment_end,
+	json_tokener_state_string,
+	json_tokener_state_string_escape,
+	json_tokener_state_escape_unicode,
+	json_tokener_state_escape_unicode_need_escape,
+	json_tokener_state_escape_unicode_need_u,
+	json_tokener_state_boolean,
+	json_tokener_state_number,
+	json_tokener_state_array,
+	json_tokener_state_array_add,
+	json_tokener_state_array_sep,
+	json_tokener_state_object_field_start,
+	json_tokener_state_object_field,
+	json_tokener_state_object_field_end,
+	json_tokener_state_object_value,
+	json_tokener_state_object_value_add,
+	json_tokener_state_object_sep,
+	json_tokener_state_array_after_sep,
+	json_tokener_state_object_field_start_after_sep,
+	json_tokener_state_inf
+};
+
+/**
+ * @deprecated Don't use this outside of json_tokener.c, it will be made private in a future release.
+ */
+struct json_tokener_srec
+{
+	enum json_tokener_state state, saved_state;
+	struct json_object *obj;
+	struct json_object *current;
+	char *obj_field_name;
+};
+
+#define JSON_TOKENER_DEFAULT_DEPTH 32
+
+/**
+ * Internal state of the json parser.
+ * Do not access any fields of this structure directly.
+ * Its definition is published due to historical limitations
+ * in the json tokener API, and will be changed to be an opaque
+ * type in the future.
+ */
+struct json_tokener
+{
+	/**
+	 * @deprecated Do not access any of these fields outside of json_tokener.c
+	 */
+	char *str;
+	struct printbuf *pb;
+	int max_depth, depth, is_double, st_pos;
+	/**
+	 * @deprecated See json_tokener_get_parse_end() instead.
+	 */
+	int char_offset;
+	/**
+	 * @deprecated See json_tokener_get_error() instead.
+	 */
+	enum json_tokener_error err;
+	unsigned int ucs_char, high_surrogate;
+	char quote_char;
+	struct json_tokener_srec *stack;
+	int flags;
+};
+
+/**
+ * Return the offset of the byte after the last byte parsed
+ * relative to the start of the most recent string passed in
+ * to json_tokener_parse_ex().  i.e. this is where parsing
+ * would start again if the input contains another JSON object
+ * after the currently parsed one.
+ *
+ * Note that when multiple parse calls are issued, this is *not* the
+ * total number of characters parsed.
+ *
+ * In the past this would have been accessed as tok->char_offset.
+ *
+ * See json_tokener_parse_ex() for an example of how to use this.
+ */
+JSON_EXPORT size_t json_tokener_get_parse_end(struct json_tokener *tok);
+
+/**
+ * @deprecated Unused in json-c code
+ */
+typedef struct json_tokener json_tokener;
+
+/**
+ * Be strict when parsing JSON input.  Use caution with
+ * this flag as what is considered valid may become more
+ * restrictive from one release to the next, causing your
+ * code to fail on previously working input.
+ *
+ * Note that setting this will also effectively disable parsing
+ * of multiple json objects in a single character stream
+ * (e.g. {"foo":123}{"bar":234}); if you want to allow that
+ * also set JSON_TOKENER_ALLOW_TRAILING_CHARS
+ *
+ * This flag is not set by default.
+ *
+ * @see json_tokener_set_flags()
+ */
+#define JSON_TOKENER_STRICT 0x01
+
+/**
+ * Use with JSON_TOKENER_STRICT to allow trailing characters after the
+ * first parsed object.
+ *
+ * @see json_tokener_set_flags()
+ */
+#define JSON_TOKENER_ALLOW_TRAILING_CHARS 0x02
+
+/**
+ * Cause json_tokener_parse_ex() to validate that input is UTF8.
+ * If this flag is specified and validation fails, then
+ * json_tokener_get_error(tok) will return
+ * json_tokener_error_parse_utf8_string
+ *
+ * This flag is not set by default.
+ *
+ * @see json_tokener_set_flags()
+ */
+#define JSON_TOKENER_VALIDATE_UTF8 0x10
+
+/**
+ * Given an error previously returned by json_tokener_get_error(),
+ * return a human readable description of the error.
+ *
+ * @return a generic error message is returned if an invalid error value is provided.
+ */
+JSON_EXPORT const char *json_tokener_error_desc(enum json_tokener_error jerr);
+
+/**
+ * Retrieve the error caused by the last call to json_tokener_parse_ex(),
+ * or json_tokener_success if there is no error.
+ *
+ * When parsing a JSON string in pieces, if the tokener is in the middle
+ * of parsing this will return json_tokener_continue.
+ *
+ * @see json_tokener_error_desc().
+ */
+JSON_EXPORT enum json_tokener_error json_tokener_get_error(struct json_tokener *tok);
+
+/**
+ * Allocate a new json_tokener.
+ * When done using that to parse objects, free it with json_tokener_free().
+ * See json_tokener_parse_ex() for usage details.
+ */
+JSON_EXPORT struct json_tokener *json_tokener_new(void);
+
+/**
+ * Allocate a new json_tokener with a custom max nesting depth.
+ * @see JSON_TOKENER_DEFAULT_DEPTH
+ */
+JSON_EXPORT struct json_tokener *json_tokener_new_ex(int depth);
+
+/**
+ * Free a json_tokener previously allocated with json_tokener_new().
+ */
+JSON_EXPORT void json_tokener_free(struct json_tokener *tok);
+
+/**
+ * Reset the state of a json_tokener, to prepare to parse a 
+ * brand new JSON object.
+ */
+JSON_EXPORT void json_tokener_reset(struct json_tokener *tok);
+
+/**
+ * Parse a json_object out of the string `str`.
+ *
+ * If you need more control over how the parsing occurs,
+ * see json_tokener_parse_ex().
+ */
+JSON_EXPORT struct json_object *json_tokener_parse(const char *str);
+
+/**
+ * Parser a json_object out of the string `str`, but if it fails
+ * return the error in `*error`.
+ * @see json_tokener_parse()
+ * @see json_tokener_parse_ex()
+ */
+JSON_EXPORT struct json_object *json_tokener_parse_verbose(const char *str,
+                                                           enum json_tokener_error *error);
+
+/**
+ * Set flags that control how parsing will be done.
+ */
+JSON_EXPORT void json_tokener_set_flags(struct json_tokener *tok, int flags);
+
+/**
+ * Parse a string and return a non-NULL json_object if a valid JSON value
+ * is found.  The string does not need to be a JSON object or array;
+ * it can also be a string, number or boolean value.
+ *
+ * A partial JSON string can be parsed.  If the parsing is incomplete,
+ * NULL will be returned and json_tokener_get_error() will return
+ * json_tokener_continue.
+ * json_tokener_parse_ex() can then be called with additional bytes in str
+ * to continue the parsing.
+ *
+ * If json_tokener_parse_ex() returns NULL and the error is anything other than
+ * json_tokener_continue, a fatal error has occurred and parsing must be
+ * halted.  Then, the tok object must not be reused until json_tokener_reset()
+ * is called.
+ *
+ * When a valid JSON value is parsed, a non-NULL json_object will be
+ * returned, with a reference count of one which belongs to the caller.  Also,
+ * json_tokener_get_error() will return json_tokener_success. Be sure to check
+ * the type with json_object_is_type() or json_object_get_type() before using
+ * the object.
+ *
+ * Trailing characters after the parsed value do not automatically cause an
+ * error.  It is up to the caller to decide whether to treat this as an
+ * error or to handle the additional characters, perhaps by parsing another
+ * json value starting from that point.
+ *
+ * If the caller knows that they are at the end of their input, the length
+ * passed MUST include the final '\0' character, so values with no inherent
+ * end (i.e. numbers) can be properly parsed, rather than just returning
+ * json_tokener_continue.
+ *
+ * Extra characters can be detected by comparing the value returned by
+ * json_tokener_get_parse_end() against
+ * the length of the last len parameter passed in.
+ *
+ * The tokener does \b not maintain an internal buffer so the caller is
+ * responsible for a subsequent call to json_tokener_parse_ex with an 
+ * appropriate str parameter starting with the extra characters.
+ *
+ * This interface is presently not 64-bit clean due to the int len argument
+ * so the function limits the maximum string size to INT32_MAX (2GB).
+ * If the function is called with len == -1 then strlen is called to check
+ * the string length is less than INT32_MAX (2GB)
+ *
+ * Example:
+ * @code
+json_object *jobj = NULL;
+const char *mystring = NULL;
+int stringlen = 0;
+enum json_tokener_error jerr;
+do {
+	mystring = ...  // get JSON string, e.g. read from file, etc...
+	stringlen = strlen(mystring);
+	if (end_of_input)
+		stringlen++;  // Include the '\0' if we know we're at the end of input
+	jobj = json_tokener_parse_ex(tok, mystring, stringlen);
+} while ((jerr = json_tokener_get_error(tok)) == json_tokener_continue);
+if (jerr != json_tokener_success)
+{
+	fprintf(stderr, "Error: %s\n", json_tokener_error_desc(jerr));
+	// Handle errors, as appropriate for your application.
+}
+if (json_tokener_get_parse_end(tok) < stringlen)
+{
+	// Handle extra characters after parsed object as desired.
+	// e.g. issue an error, parse another object from that point, etc...
+}
+// Success, use jobj here.
+
+@endcode
+ *
+ * @param tok a json_tokener previously allocated with json_tokener_new()
+ * @param str an string with any valid JSON expression, or portion of.  This does not need to be null terminated.
+ * @param len the length of str
+ */
+JSON_EXPORT struct json_object *json_tokener_parse_ex(struct json_tokener *tok, const char *str,
+                                                      int len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+\n[end of json_tokener.h]\n[start of linkhash.c]\nlinkhash.c
+/*
+ * $Id: linkhash.c,v 1.4 2006/01/26 02:16:28 mclark Exp $
+ *
+ * Copyright (c) 2004, 2005 Metaparadigm Pte. Ltd.
+ * Michael Clark <michael@metaparadigm.com>
+ * Copyright (c) 2009 Hewlett-Packard Development Company, L.P.
+ *
+ * This library is free software; you can redistribute it and/or modify
+ * it under the terms of the MIT license. See COPYING for details.
+ *
+ */
+
+#include "config.h"
+
+#include <assert.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef HAVE_ENDIAN_H
+#include <endian.h> /* attempt to define endianness */
+#endif
+
+#if defined(_MSC_VER) || defined(__MINGW32__)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> /* Get InterlockedCompareExchange */
+#endif
+
+#include "linkhash.h"
+#include "random_seed.h"
+
+/* hash functions */
+static unsigned long lh_char_hash(const void *k);
+static unsigned long lh_perllike_str_hash(const void *k);
+static lh_hash_fn *char_hash_fn = lh_char_hash;
+
+/* comparison functions */
+int lh_char_equal(const void *k1, const void *k2);
+int lh_ptr_equal(const void *k1, const void *k2);
+
+int json_global_set_string_hash(const int h)
+{
+	switch (h)
+	{
+	case JSON_C_STR_HASH_DFLT: char_hash_fn = lh_char_hash; break;
+	case JSON_C_STR_HASH_PERLLIKE: char_hash_fn = lh_perllike_str_hash; break;
+	default: return -1;
+	}
+	return 0;
+}
+
+static unsigned long lh_ptr_hash(const void *k)
+{
+	/* CAW: refactored to be 64bit nice */
+	return (unsigned long)((((ptrdiff_t)k * LH_PRIME) >> 4) & ULONG_MAX);
+}
+
+int lh_ptr_equal(const void *k1, const void *k2)
+{
+	return (k1 == k2);
+}
+
+/*
+ * hashlittle from lookup3.c, by Bob Jenkins, May 2006, Public Domain.
+ * http://burtleburtle.net/bob/c/lookup3.c
+ * minor modifications to make functions static so no symbols are exported
+ * minor mofifications to compile with -Werror
+ */
+
+/*
+-------------------------------------------------------------------------------
+lookup3.c, by Bob Jenkins, May 2006, Public Domain.
+
+These are functions for producing 32-bit hashes for hash table lookup.
+hashword(), hashlittle(), hashlittle2(), hashbig(), mix(), and final()
+are externally useful functions.  Routines to test the hash are included
+if SELF_TEST is defined.  You can use this free for any purpose.  It's in
+the public domain.  It has no warranty.
+
+You probably want to use hashlittle().  hashlittle() and hashbig()
+hash byte arrays.  hashlittle() is is faster than hashbig() on
+little-endian machines.  Intel and AMD are little-endian machines.
+On second thought, you probably want hashlittle2(), which is identical to
+hashlittle() except it returns two 32-bit hashes for the price of one.
+You could implement hashbig2() if you wanted but I haven't bothered here.
+
+If you want to find a hash of, say, exactly 7 integers, do
+  a = i1;  b = i2;  c = i3;
+  mix(a,b,c);
+  a += i4; b += i5; c += i6;
+  mix(a,b,c);
+  a += i7;
+  final(a,b,c);
+then use c as the hash value.  If you have a variable length array of
+4-byte integers to hash, use hashword().  If you have a byte array (like
+a character string), use hashlittle().  If you have several byte arrays, or
+a mix of things, see the comments above hashlittle().
+
+Why is this so big?  I read 12 bytes at a time into 3 4-byte integers,
+then mix those integers.  This is fast (you can do a lot more thorough
+mixing with 12*3 instructions on 3 integers than you can with 3 instructions
+on 1 byte), but shoehorning those bytes into integers efficiently is messy.
+-------------------------------------------------------------------------------
+*/
+
+/*
+ * My best guess at if you are big-endian or little-endian.  This may
+ * need adjustment.
+ */
+#if (defined(__BYTE_ORDER) && defined(__LITTLE_ENDIAN) && __BYTE_ORDER == __LITTLE_ENDIAN) || \
+    (defined(i386) || defined(__i386__) || defined(__i486__) || defined(__i586__) ||          \
+     defined(__i686__) || defined(vax) || defined(MIPSEL))
+#define HASH_LITTLE_ENDIAN 1
+#define HASH_BIG_ENDIAN 0
+#elif (defined(__BYTE_ORDER) && defined(__BIG_ENDIAN) && __BYTE_ORDER == __BIG_ENDIAN) || \
+    (defined(sparc) || defined(POWERPC) || defined(mc68000) || defined(sel))
+#define HASH_LITTLE_ENDIAN 0
+#define HASH_BIG_ENDIAN 1
+#else
+#define HASH_LITTLE_ENDIAN 0
+#define HASH_BIG_ENDIAN 0
+#endif
+
+#define hashsize(n) ((uint32_t)1 << (n))
+#define hashmask(n) (hashsize(n) - 1)
+#define rot(x, k) (((x) << (k)) | ((x) >> (32 - (k))))
+
+/*
+-------------------------------------------------------------------------------
+mix -- mix 3 32-bit values reversibly.
+
+This is reversible, so any information in (a,b,c) before mix() is
+still in (a,b,c) after mix().
+
+If four pairs of (a,b,c) inputs are run through mix(), or through
+mix() in reverse, there are at least 32 bits of the output that
+are sometimes the same for one pair and different for another pair.
+This was tested for:
+* pairs that differed by one bit, by two bits, in any combination
+  of top bits of (a,b,c), or in any combination of bottom bits of
+  (a,b,c).
+* "differ" is defined as +, -, ^, or ~^.  For + and -, I transformed
+  the output delta to a Gray code (a^(a>>1)) so a string of 1's (as
+  is commonly produced by subtraction) look like a single 1-bit
+  difference.
+* the base values were pseudorandom, all zero but one bit set, or
+  all zero plus a counter that starts at zero.
+
+Some k values for my "a-=c; a^=rot(c,k); c+=b;" arrangement that
+satisfy this are
+    4  6  8 16 19  4
+    9 15  3 18 27 15
+   14  9  3  7 17  3
+Well, "9 15 3 18 27 15" didn't quite get 32 bits diffing
+for "differ" defined as + with a one-bit base and a two-bit delta.  I
+used http://burtleburtle.net/bob/hash/avalanche.html to choose
+the operations, constants, and arrangements of the variables.
+
+This does not achieve avalanche.  There are input bits of (a,b,c)
+that fail to affect some output bits of (a,b,c), especially of a.  The
+most thoroughly mixed value is c, but it doesn't really even achieve
+avalanche in c.
+
+This allows some parallelism.  Read-after-writes are good at doubling
+the number of bits affected, so the goal of mixing pulls in the opposite
+direction as the goal of parallelism.  I did what I could.  Rotates
+seem to cost as much as shifts on every machine I could lay my hands
+on, and rotates are much kinder to the top and bottom bits, so I used
+rotates.
+-------------------------------------------------------------------------------
+*/
+/* clang-format off */
+#define mix(a,b,c) \
+{ \
+	a -= c;  a ^= rot(c, 4);  c += b; \
+	b -= a;  b ^= rot(a, 6);  a += c; \
+	c -= b;  c ^= rot(b, 8);  b += a; \
+	a -= c;  a ^= rot(c,16);  c += b; \
+	b -= a;  b ^= rot(a,19);  a += c; \
+	c -= b;  c ^= rot(b, 4);  b += a; \
+}
+/* clang-format on */
+
+/*
+-------------------------------------------------------------------------------
+final -- final mixing of 3 32-bit values (a,b,c) into c
+
+Pairs of (a,b,c) values differing in only a few bits will usually
+produce values of c that look totally different.  This was tested for
+* pairs that differed by one bit, by two bits, in any combination
+  of top bits of (a,b,c), or in any combination of bottom bits of
+  (a,b,c).
+* "differ" is defined as +, -, ^, or ~^.  For + and -, I transformed
+  the output delta to a Gray code (a^(a>>1)) so a string of 1's (as
+  is commonly produced by subtraction) look like a single 1-bit
+  difference.
+* the base values were pseudorandom, all zero but one bit set, or
+  all zero plus a counter that starts at zero.
+
+These constants passed:
+ 14 11 25 16 4 14 24
+ 12 14 25 16 4 14 24
+and these came close:
+  4  8 15 26 3 22 24
+ 10  8 15 26 3 22 24
+ 11  8 15 26 3 22 24
+-------------------------------------------------------------------------------
+*/
+/* clang-format off */
+#define final(a,b,c) \
+{ \
+	c ^= b; c -= rot(b,14); \
+	a ^= c; a -= rot(c,11); \
+	b ^= a; b -= rot(a,25); \
+	c ^= b; c -= rot(b,16); \
+	a ^= c; a -= rot(c,4);  \
+	b ^= a; b -= rot(a,14); \
+	c ^= b; c -= rot(b,24); \
+}
+/* clang-format on */
+
+/*
+-------------------------------------------------------------------------------
+hashlittle() -- hash a variable-length key into a 32-bit value
+  k       : the key (the unaligned variable-length array of bytes)
+  length  : the length of the key, counting by bytes
+  initval : can be any 4-byte value
+Returns a 32-bit value.  Every bit of the key affects every bit of
+the return value.  Two keys differing by one or two bits will have
+totally different hash values.
+
+The best hash table sizes are powers of 2.  There is no need to do
+mod a prime (mod is sooo slow!).  If you need less than 32 bits,
+use a bitmask.  For example, if you need only 10 bits, do
+  h = (h & hashmask(10));
+In which case, the hash table should have hashsize(10) elements.
+
+If you are hashing n strings (uint8_t **)k, do it like this:
+  for (i=0, h=0; i<n; ++i) h = hashlittle( k[i], len[i], h);
+
+By Bob Jenkins, 2006.  bob_jenkins@burtleburtle.net.  You may use this
+code any way you wish, private, educational, or commercial.  It's free.
+
+Use for hash table lookup, or anything where one collision in 2^^32 is
+acceptable.  Do NOT use for cryptographic purposes.
+-------------------------------------------------------------------------------
+*/
+
+/* clang-format off */
+static uint32_t hashlittle(const void *key, size_t length, uint32_t initval)
+{
+	uint32_t a,b,c; /* internal state */
+	union
+	{
+		const void *ptr;
+		size_t i;
+	} u; /* needed for Mac Powerbook G4 */
+
+	/* Set up the internal state */
+	a = b = c = 0xdeadbeef + ((uint32_t)length) + initval;
+
+	u.ptr = key;
+	if (HASH_LITTLE_ENDIAN && ((u.i & 0x3) == 0)) {
+		const uint32_t *k = (const uint32_t *)key; /* read 32-bit chunks */
+
+		/*------ all but last block: aligned reads and affect 32 bits of (a,b,c) */
+		while (length > 12)
+		{
+			a += k[0];
+			b += k[1];
+			c += k[2];
+			mix(a,b,c);
+			length -= 12;
+			k += 3;
+		}
+
+		/*----------------------------- handle the last (probably partial) block */
+		/*
+		 * "k[2]&0xffffff" actually reads beyond the end of the string, but
+		 * then masks off the part it's not allowed to read.  Because the
+		 * string is aligned, the masked-off tail is in the same word as the
+		 * rest of the string.  Every machine with memory protection I've seen
+		 * does it on word boundaries, so is OK with this.  But VALGRIND will
+		 * still catch it and complain.  The masking trick does make the hash
+		 * noticably faster for short strings (like English words).
+		 * AddressSanitizer is similarly picky about overrunning
+		 * the buffer. (http://clang.llvm.org/docs/AddressSanitizer.html
+		 */
+#ifdef VALGRIND
+#define PRECISE_MEMORY_ACCESS 1
+#elif defined(__SANITIZE_ADDRESS__) /* GCC's ASAN */
+#define PRECISE_MEMORY_ACCESS 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) /* Clang's ASAN */
+#define PRECISE_MEMORY_ACCESS 1
+#endif
+#endif
+#ifndef PRECISE_MEMORY_ACCESS
+
+		switch(length)
+		{
+		case 12: c+=k[2]; b+=k[1]; a+=k[0]; break;
+		case 11: c+=k[2]&0xffffff; b+=k[1]; a+=k[0]; break;
+		case 10: c+=k[2]&0xffff; b+=k[1]; a+=k[0]; break;
+		case 9 : c+=k[2]&0xff; b+=k[1]; a+=k[0]; break;
+		case 8 : b+=k[1]; a+=k[0]; break;
+		case 7 : b+=k[1]&0xffffff; a+=k[0]; break;
+		case 6 : b+=k[1]&0xffff; a+=k[0]; break;
+		case 5 : b+=k[1]&0xff; a+=k[0]; break;
+		case 4 : a+=k[0]; break;
+		case 3 : a+=k[0]&0xffffff; break;
+		case 2 : a+=k[0]&0xffff; break;
+		case 1 : a+=k[0]&0xff; break;
+		case 0 : return c; /* zero length strings require no mixing */
+		}
+
+#else /* make valgrind happy */
+
+		const uint8_t  *k8 = (const uint8_t *)k;
+		switch(length)
+		{
+		case 12: c+=k[2]; b+=k[1]; a+=k[0]; break;
+		case 11: c+=((uint32_t)k8[10])<<16;  /* fall through */
+		case 10: c+=((uint32_t)k8[9])<<8;    /* fall through */
+		case 9 : c+=k8[8];                   /* fall through */
+		case 8 : b+=k[1]; a+=k[0]; break;
+		case 7 : b+=((uint32_t)k8[6])<<16;   /* fall through */
+		case 6 : b+=((uint32_t)k8[5])<<8;    /* fall through */
+		case 5 : b+=k8[4];                   /* fall through */
+		case 4 : a+=k[0]; break;
+		case 3 : a+=((uint32_t)k8[2])<<16;   /* fall through */
+		case 2 : a+=((uint32_t)k8[1])<<8;    /* fall through */
+		case 1 : a+=k8[0]; break;
+		case 0 : return c;
+		}
+
+#endif /* !valgrind */
+
+	}
+	else if (HASH_LITTLE_ENDIAN && ((u.i & 0x1) == 0))
+	{
+		const uint16_t *k = (const uint16_t *)key; /* read 16-bit chunks */
+		const uint8_t  *k8;
+
+		/*--------------- all but last block: aligned reads and different mixing */
+		while (length > 12)
+		{
+			a += k[0] + (((uint32_t)k[1])<<16);
+			b += k[2] + (((uint32_t)k[3])<<16);
+			c += k[4] + (((uint32_t)k[5])<<16);
+			mix(a,b,c);
+			length -= 12;
+			k += 6;
+		}
+
+		/*----------------------------- handle the last (probably partial) block */
+		k8 = (const uint8_t *)k;
+		switch(length)
+		{
+		case 12: c+=k[4]+(((uint32_t)k[5])<<16);
+			 b+=k[2]+(((uint32_t)k[3])<<16);
+			 a+=k[0]+(((uint32_t)k[1])<<16);
+			 break;
+		case 11: c+=((uint32_t)k8[10])<<16;     /* fall through */
+		case 10: c+=k[4];
+			 b+=k[2]+(((uint32_t)k[3])<<16);
+			 a+=k[0]+(((uint32_t)k[1])<<16);
+			 break;
+		case 9 : c+=k8[8];                      /* fall through */
+		case 8 : b+=k[2]+(((uint32_t)k[3])<<16);
+			 a+=k[0]+(((uint32_t)k[1])<<16);
+			 break;
+		case 7 : b+=((uint32_t)k8[6])<<16;      /* fall through */
+		case 6 : b+=k[2];
+			 a+=k[0]+(((uint32_t)k[1])<<16);
+			 break;
+		case 5 : b+=k8[4];                      /* fall through */
+		case 4 : a+=k[0]+(((uint32_t)k[1])<<16);
+			 break;
+		case 3 : a+=((uint32_t)k8[2])<<16;      /* fall through */
+		case 2 : a+=k[0];
+			 break;
+		case 1 : a+=k8[0];
+			 break;
+		case 0 : return c;                     /* zero length requires no mixing */
+		}
+
+	}
+	else
+	{
+		/* need to read the key one byte at a time */
+		const uint8_t *k = (const uint8_t *)key;
+
+		/*--------------- all but the last block: affect some 32 bits of (a,b,c) */
+		while (length > 12)
+		{
+			a += k[0];
+			a += ((uint32_t)k[1])<<8;
+			a += ((uint32_t)k[2])<<16;
+			a += ((uint32_t)k[3])<<24;
+			b += k[4];
+			b += ((uint32_t)k[5])<<8;
+			b += ((uint32_t)k[6])<<16;
+			b += ((uint32_t)k[7])<<24;
+			c += k[8];
+			c += ((uint32_t)k[9])<<8;
+			c += ((uint32_t)k[10])<<16;
+			c += ((uint32_t)k[11])<<24;
+			mix(a,b,c);
+			length -= 12;
+			k += 12;
+		}
+
+		/*-------------------------------- last block: affect all 32 bits of (c) */
+		switch(length) /* all the case statements fall through */
+		{
+		case 12: c+=((uint32_t)k[11])<<24; /* FALLTHRU */
+		case 11: c+=((uint32_t)k[10])<<16; /* FALLTHRU */
+		case 10: c+=((uint32_t)k[9])<<8; /* FALLTHRU */
+		case 9 : c+=k[8]; /* FALLTHRU */
+		case 8 : b+=((uint32_t)k[7])<<24; /* FALLTHRU */
+		case 7 : b+=((uint32_t)k[6])<<16; /* FALLTHRU */
+		case 6 : b+=((uint32_t)k[5])<<8; /* FALLTHRU */
+		case 5 : b+=k[4]; /* FALLTHRU */
+		case 4 : a+=((uint32_t)k[3])<<24; /* FALLTHRU */
+		case 3 : a+=((uint32_t)k[2])<<16; /* FALLTHRU */
+		case 2 : a+=((uint32_t)k[1])<<8; /* FALLTHRU */
+		case 1 : a+=k[0];
+			 break;
+		case 0 : return c;
+		}
+	}
+
+	final(a,b,c);
+	return c;
+}
+/* clang-format on */
+
+/* a simple hash function similiar to what perl does for strings.
+ * for good results, the string should not be excessivly large.
+ */
+static unsigned long lh_perllike_str_hash(const void *k)
+{
+	const char *rkey = (const char *)k;
+	unsigned hashval = 1;
+
+	while (*rkey)
+		hashval = hashval * 33 + *rkey++;
+
+	return hashval;
+}
+
+static unsigned long lh_char_hash(const void *k)
+{
+#if defined _MSC_VER || defined __MINGW32__
+#define RANDOM_SEED_TYPE LONG
+#else
+#define RANDOM_SEED_TYPE int
+#endif
+	static volatile RANDOM_SEED_TYPE random_seed = -1;
+
+	if (random_seed == -1)
+	{
+		RANDOM_SEED_TYPE seed;
+		/* we can't use -1 as it is the unitialized sentinel */
+		while ((seed = json_c_get_random_seed()) == -1) {}
+#if SIZEOF_INT == 8 && defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
+#define USE_SYNC_COMPARE_AND_SWAP 1
+#endif
+#if SIZEOF_INT == 4 && defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
+#define USE_SYNC_COMPARE_AND_SWAP 1
+#endif
+#if SIZEOF_INT == 2 && defined __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2
+#define USE_SYNC_COMPARE_AND_SWAP 1
+#endif
+#if defined USE_SYNC_COMPARE_AND_SWAP
+		(void)__sync_val_compare_and_swap(&random_seed, -1, seed);
+#elif defined _MSC_VER || defined __MINGW32__
+		InterlockedCompareExchange(&random_seed, seed, -1);
+#else
+		//#warning "racy random seed initializtion if used by multiple threads"
+		random_seed = seed; /* potentially racy */
+#endif
+	}
+
+	return hashlittle((const char *)k, strlen((const char *)k), random_seed);
+}
+
+int lh_char_equal(const void *k1, const void *k2)
+{
+	return (strcmp((const char *)k1, (const char *)k2) == 0);
+}
+
+struct lh_table *lh_table_new(int size, lh_entry_free_fn *free_fn, lh_hash_fn *hash_fn,
+                              lh_equal_fn *equal_fn)
+{
+	int i;
+	struct lh_table *t;
+
+	/* Allocate space for elements to avoid divisions by zero. */
+	assert(size > 0);
+	t = (struct lh_table *)calloc(1, sizeof(struct lh_table));
+	if (!t)
+		return NULL;
+
+	t->count = 0;
+	t->size = size;
+	t->table = (struct lh_entry *)calloc(size, sizeof(struct lh_entry));
+	if (!t->table)
+	{
+		free(t);
+		return NULL;
+	}
+	t->free_fn = free_fn;
+	t->hash_fn = hash_fn;
+	t->equal_fn = equal_fn;
+	for (i = 0; i < size; i++)
+		t->table[i].k = LH_EMPTY;
+	return t;
+}
+
+struct lh_table *lh_kchar_table_new(int size, lh_entry_free_fn *free_fn)
+{
+	return lh_table_new(size, free_fn, char_hash_fn, lh_char_equal);
+}
+
+struct lh_table *lh_kptr_table_new(int size, lh_entry_free_fn *free_fn)
+{
+	return lh_table_new(size, free_fn, lh_ptr_hash, lh_ptr_equal);
+}
+
+int lh_table_resize(struct lh_table *t, int new_size)
+{
+	struct lh_table *new_t;
+	struct lh_entry *ent;
+
+	new_t = lh_table_new(new_size, NULL, t->hash_fn, t->equal_fn);
+	if (new_t == NULL)
+		return -1;
+
+	for (ent = t->head; ent != NULL; ent = ent->next)
+	{
+		unsigned long h = lh_get_hash(new_t, ent->k);
+		unsigned int opts = 0;
+		if (ent->k_is_constant)
+			opts = JSON_C_OBJECT_KEY_IS_CONSTANT;
+		if (lh_table_insert_w_hash(new_t, ent->k, ent->v, h, opts) != 0)
+		{
+			lh_table_free(new_t);
+			return -1;
+		}
+	}
+	free(t->table);
+	t->table = new_t->table;
+	t->size = new_size;
+	t->head = new_t->head;
+	t->tail = new_t->tail;
+	free(new_t);
+
+	return 0;
+}
+
+void lh_table_free(struct lh_table *t)
+{
+	struct lh_entry *c;
+	if (t->free_fn)
+	{
+		for (c = t->head; c != NULL; c = c->next)
+			t->free_fn(c);
+	}
+	free(t->table);
+	free(t);
+}
+
+int lh_table_insert_w_hash(struct lh_table *t, const void *k, const void *v, const unsigned long h,
+                           const unsigned opts)
+{
+	unsigned long n;
+
+	if (t->count >= t->size * LH_LOAD_FACTOR)
+	{
+		/* Avoid signed integer overflow with large tables. */
+		int new_size = (t->size > INT_MAX / 2) ? INT_MAX : (t->size * 2);
+		if (t->size == INT_MAX || lh_table_resize(t, new_size) != 0)
+			return -1;
+	}
+
+	n = h % t->size;
+
+	while (1)
+	{
+		if (t->table[n].k == LH_EMPTY || t->table[n].k == LH_FREED)
+			break;
+		if ((int)++n == t->size)
+			n = 0;
+	}
+
+	t->table[n].k = k;
+	t->table[n].k_is_constant = (opts & JSON_C_OBJECT_KEY_IS_CONSTANT);
+	t->table[n].v = v;
+	t->count++;
+
+	if (t->head == NULL)
+	{
+		t->head = t->tail = &t->table[n];
+		t->table[n].next = t->table[n].prev = NULL;
+	}
+	else
+	{
+		t->tail->next = &t->table[n];
+		t->table[n].prev = t->tail;
+		t->table[n].next = NULL;
+		t->tail = &t->table[n];
+	}
+
+	return 0;
+}
+int lh_table_insert(struct lh_table *t, const void *k, const void *v)
+{
+	return lh_table_insert_w_hash(t, k, v, lh_get_hash(t, k), 0);
+}
+
+struct lh_entry *lh_table_lookup_entry_w_hash(struct lh_table *t, const void *k,
+                                              const unsigned long h)
+{
+	unsigned long n = h % t->size;
+	int count = 0;
+
+	while (count < t->size)
+	{
+		if (t->table[n].k == LH_EMPTY)
+			return NULL;
+		if (t->table[n].k != LH_FREED && t->equal_fn(t->table[n].k, k))
+			return &t->table[n];
+		if ((int)++n == t->size)
+			n = 0;
+		count++;
+	}
+	return NULL;
+}
+
+struct lh_entry *lh_table_lookup_entry(struct lh_table *t, const void *k)
+{
+	return lh_table_lookup_entry_w_hash(t, k, lh_get_hash(t, k));
+}
+
+json_bool lh_table_lookup_ex(struct lh_table *t, const void *k, void **v)
+{
+	struct lh_entry *e = lh_table_lookup_entry(t, k);
+	if (e != NULL)
+	{
+		if (v != NULL)
+			*v = lh_entry_v(e);
+		return 1; /* key found */
+	}
+	if (v != NULL)
+		*v = NULL;
+	return 0; /* key not found */
+}
+
+int lh_table_delete_entry(struct lh_table *t, struct lh_entry *e)
+{
+	/* CAW: fixed to be 64bit nice, still need the crazy negative case... */
+	ptrdiff_t n = (ptrdiff_t)(e - t->table);
+
+	/* CAW: this is bad, really bad, maybe stack goes other direction on this machine... */
+	if (n < 0)
+	{
+		return -2;
+	}
+
+	if (t->table[n].k == LH_EMPTY || t->table[n].k == LH_FREED)
+		return -1;
+	t->count--;
+	if (t->free_fn)
+		t->free_fn(e);
+	t->table[n].v = NULL;
+	t->table[n].k = LH_FREED;
+	if (t->tail == &t->table[n] && t->head == &t->table[n])
+	{
+		t->head = t->tail = NULL;
+	}
+	else if (t->head == &t->table[n])
+	{
+		t->head->next->prev = NULL;
+		t->head = t->head->next;
+	}
+	else if (t->tail == &t->table[n])
+	{
+		t->tail->prev->next = NULL;
+		t->tail = t->tail->prev;
+	}
+	else
+	{
+		t->table[n].prev->next = t->table[n].next;
+		t->table[n].next->prev = t->table[n].prev;
+	}
+	t->table[n].next = t->table[n].prev = NULL;
+	return 0;
+}
+
+int lh_table_delete(struct lh_table *t, const void *k)
+{
+	struct lh_entry *e = lh_table_lookup_entry(t, k);
+	if (!e)
+		return -1;
+	return lh_table_delete_entry(t, e);
+}
+
+int lh_table_length(struct lh_table *t)
+{
+	return t->count;
+}
+\n[end of linkhash.c]\n[start of json_object_private.h]\njson_object_private.h
+/*
+ * $Id: json_object_private.h,v 1.4 2006/01/26 02:16:28 mclark Exp $
+ *
+ * Copyright (c) 2004, 2005 Metaparadigm Pte. Ltd.
+ * Michael Clark <michael@metaparadigm.com>
+ *
+ * This library is free software; you can redistribute it and/or modify
+ * it under the terms of the MIT license. See COPYING for details.
+ *
+ */
+
+/**
+ * @file
+ * @brief Do not use, json-c internal, may be changed or removed at any time.
+ */
+#ifndef _json_object_private_h_
+#define _json_object_private_h_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct json_object;
+#include "json_inttypes.h"
+#include "json_types.h"
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif /* HAVE_UNISTD_H */
+
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
+/* json object int type, support extension*/
+typedef enum json_object_int_type
+{
+	json_object_int_type_int64,
+	json_object_int_type_uint64
+} json_object_int_type;
+
+struct json_object
+{
+	enum json_type o_type;
+	uint32_t _ref_count;
+	json_object_to_json_string_fn *_to_json_string;
+	struct printbuf *_pb;
+	json_object_delete_fn *_user_delete;
+	void *_userdata;
+	// Actually longer, always malloc'd as some more-specific type.
+	// The rest of a struct json_object_${o_type} follows
+};
+
+struct json_object_object
+{
+	struct json_object base;
+	struct lh_table *c_object;
+};
+struct json_object_array
+{
+	struct json_object base;
+	struct array_list *c_array;
+};
+
+struct json_object_boolean
+{
+	struct json_object base;
+	json_bool c_boolean;
+};
+struct json_object_double
+{
+	struct json_object base;
+	double c_double;
+};
+struct json_object_int
+{
+	struct json_object base;
+	enum json_object_int_type cint_type;
+	union
+	{
+		int64_t c_int64;
+		uint64_t c_uint64;
+	} cint;
+};
+struct json_object_string
+{
+	struct json_object base;
+	ssize_t len; // Signed b/c negative lengths indicate data is a pointer
+	// Consider adding an "alloc" field here, if json_object_set_string calls
+	// to expand the length of a string are common operations to perform.
+	union
+	{
+		char idata[1]; // Immediate data.  Actually longer
+		char *pdata;   // Only when len < 0
+	} c_string;
+};
+
+void _json_c_set_last_err(const char *err_fmt, ...);
+
+extern const char *json_hex_chars;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+\n[end of json_object_private.h]\n[start of issues_closed_for_0.13.md]\nissues_closed_for_0.13.md
+
+This list was created with:
+
+```
+curl https://api.github.com/search/issues?q="repo%3Ajson-c%2Fjson-c+closed%3A>2014-04-10+created%3A<2017-12-01&sort=created&order=asc&per_page=400&page=1" > issues1.out
+curl https://api.github.com/search/issues?q="repo%3Ajson-c%2Fjson-c+closed%3A>2014-04-10+created%3A<2017-12-01&sort=created&order=asc&per_page=400&page=2" > issues2.out
+curl https://api.github.com/search/issues?q="repo%3Ajson-c%2Fjson-c+closed%3A>2014-04-10+created%3A<2017-12-01&sort=created&order=asc&per_page=400&page=3" > issues3.out
+jq -r '.items[] | "[" + .title + "](" + .url + ")" | tostring' issues?.out  > issues.md
+sed -e's,^\[ *\(.*\)\](https://api.github.com/.*/\([0-9].*\)),[Issue #\2](https://github.com/json-c/json-c/issues/\2) - \1,' -i issues.md
+#... manual editing ...
+```
+
+----
+
+Issues and Pull Requests closed for the 0.13 release
+(since commit f84d9c, the 0.12 branch point, 2014-04-10)
+
+
+* [Issue #61](https://github.com/json-c/json-c/issues/61) - Make json_object_object_add() indicate success or failure, test fix \
+* [Issue #113](https://github.com/json-c/json-c/issues/113) - Build fixes (make dist and make distcheck) \
+* [Issue #124](https://github.com/json-c/json-c/issues/124) - Fixing build \
+* [Issue #125](https://github.com/json-c/json-c/issues/125) - Fix compile error(variable size set but not used) on g++4.6 \
+* [Issue #126](https://github.com/json-c/json-c/issues/126) - Removed unused size variable. \
+* [Issue #127](https://github.com/json-c/json-c/issues/127) - remove unused `size` variable \
+* [Issue #128](https://github.com/json-c/json-c/issues/128) - Remove unused variable from json_tokenizer.c \
+* [Issue #130](https://github.com/json-c/json-c/issues/130) - Failed to compile under Ubuntu 13.10 32bit \
+* [Issue #131](https://github.com/json-c/json-c/issues/131) - undefined symbol: __sync_val_compare_and_swap_4 \
+* [Issue #132](https://github.com/json-c/json-c/issues/132) - Remove unused variable 'size' \
+* [Issue #133](https://github.com/json-c/json-c/issues/133) - Update and rename README to README.md \
+* [Issue #134](https://github.com/json-c/json-c/issues/134) - Must remove variable size... \
+* [Issue #135](https://github.com/json-c/json-c/issues/135) - bits.h uses removed json_tokener_errors\[error\] \
+* [Issue #136](https://github.com/json-c/json-c/issues/136) - Error when running make check \
+* [Issue #137](https://github.com/json-c/json-c/issues/137) - config.h.in should not be in git \
+* [Issue #138](https://github.com/json-c/json-c/issues/138) - Can't build on RHEL 6.5 due to dependency on automake-1.14 \
+* [Issue #140](https://github.com/json-c/json-c/issues/140) - Code bug in random_test.c evaluating same expression twice \
+* [Issue #141](https://github.com/json-c/json-c/issues/141) - Removed duplicate check in random_seed test - bug #140 \
+* [Issue #142](https://github.com/json-c/json-c/issues/142) - Please undeprecate json_object_object_get \
+* [Issue #144](https://github.com/json-c/json-c/issues/144) - Introduce json_object_from_fd \
+* [Issue #145](https://github.com/json-c/json-c/issues/145) - Handle % character properly \
+* [Issue #146](https://github.com/json-c/json-c/issues/146) - TAGS rename \
+* [Issue #148](https://github.com/json-c/json-c/issues/148) - Bump the soname \
+* [Issue #149](https://github.com/json-c/json-c/issues/149) - SONAME bump \
+* [Issue #150](https://github.com/json-c/json-c/issues/150) - Fix build using MinGW. \
+* [Issue #151](https://github.com/json-c/json-c/issues/151) - Remove json_type enum trailing comma \
+* [Issue #152](https://github.com/json-c/json-c/issues/152) - error while compiling json-c library version 0.11 \
+* [Issue #153](https://github.com/json-c/json-c/issues/153) - improve doc for json_object_to_json_string() \
+* [Issue #154](https://github.com/json-c/json-c/issues/154) - double precision \
+* [Issue #155](https://github.com/json-c/json-c/issues/155) - add bsearch for arrays \
+* [Issue #156](https://github.com/json-c/json-c/issues/156) - Remove trailing whitespaces \
+* [Issue #157](https://github.com/json-c/json-c/issues/157) - JSON-C shall not exit on calloc fail. \
+* [Issue #158](https://github.com/json-c/json-c/issues/158) - while using json-c 0.11, I am facing strange crash issue in json_object_put. \
+* [Issue #159](https://github.com/json-c/json-c/issues/159) - json_tokener.c compile error \
+* [Issue #160](https://github.com/json-c/json-c/issues/160) - missing header file on windows?? \
+* [Issue #161](https://github.com/json-c/json-c/issues/161) - Is there a way to append to file? \
+* [Issue #162](https://github.com/json-c/json-c/issues/162) - json_util: add directory check for POSIX distros \
+* [Issue #163](https://github.com/json-c/json-c/issues/163) - Fix Win32 build problems \
+* [Issue #164](https://github.com/json-c/json-c/issues/164) - made it compile and link on Widnows (as static library) \
+* [Issue #165](https://github.com/json-c/json-c/issues/165) - json_object_to_json_string_ext length \
+* [Issue #167](https://github.com/json-c/json-c/issues/167) - Can't build on Windows with Visual Studio 2010 \
+* [Issue #168](https://github.com/json-c/json-c/issues/168) - Tightening the number parsing algorithm \
+* [Issue #169](https://github.com/json-c/json-c/issues/169) - Doesn't compile on ubuntu 14.04, 64bit \
+* [Issue #170](https://github.com/json-c/json-c/issues/170) - Generated files in repository \
+* [Issue #171](https://github.com/json-c/json-c/issues/171) - Update configuration for VS2010 and win64 \
+* [Issue #172](https://github.com/json-c/json-c/issues/172) - Adding support for parsing octal numbers \
+* [Issue #173](https://github.com/json-c/json-c/issues/173) - json_parse_int64 doesn't work correctly at illumos \
+* [Issue #174](https://github.com/json-c/json-c/issues/174) - Adding JSON_C_TO_STRING_PRETTY_TAB flag \
+* [Issue #175](https://github.com/json-c/json-c/issues/175) - make check fails 4 tests with overflows when built with ASAN \
+* [Issue #176](https://github.com/json-c/json-c/issues/176) - Possible to delete an array element at a given idx ? \
+* [Issue #177](https://github.com/json-c/json-c/issues/177) - Fix compiler warnings \
+* [Issue #178](https://github.com/json-c/json-c/issues/178) - Unable to compile on CentOS5 \
+* [Issue #179](https://github.com/json-c/json-c/issues/179) - Added array_list_del_idx and json_object_array_del_idx \
+* [Issue #180](https://github.com/json-c/json-c/issues/180) - Enable silent build by default \
+* [Issue #181](https://github.com/json-c/json-c/issues/181) - json_tokener_parse_ex accepts invalid JSON \
+* [Issue #182](https://github.com/json-c/json-c/issues/182) - Link against libm when needed \
+* [Issue #183](https://github.com/json-c/json-c/issues/183) - Apply compile warning fix to master branch \
+* [Issue #184](https://github.com/json-c/json-c/issues/184) - Use only GCC-specific flags when compiling with GCC \
+* [Issue #185](https://github.com/json-c/json-c/issues/185) - compile error \
+* [Issue #186](https://github.com/json-c/json-c/issues/186) - Syntax error \
+* [Issue #187](https://github.com/json-c/json-c/issues/187) - array_list_get_idx and negative indexes. \
+* [Issue #188](https://github.com/json-c/json-c/issues/188) - json_object_object_foreach warnings \
+* [Issue #189](https://github.com/json-c/json-c/issues/189) - noisy json_object_from_file: error opening file \
+* [Issue #190](https://github.com/json-c/json-c/issues/190) - warning: initialization discards const qualifier from pointer target type \[enabled by default\] \
+* [Issue #192](https://github.com/json-c/json-c/issues/192) - json_tokener_parse  accepts invalid JSON {"key": "value" ,  } \
+* [Issue #193](https://github.com/json-c/json-c/issues/193) - Make serialization format of doubles configurable \
+* [Issue #194](https://github.com/json-c/json-c/issues/194) - Add utility function for comparing json_objects \
+* [Issue #195](https://github.com/json-c/json-c/issues/195) - Call uselocale instead of setlocale \
+* [Issue #196](https://github.com/json-c/json-c/issues/196) - Performance improvements \
+* [Issue #197](https://github.com/json-c/json-c/issues/197) - Time for a new release? \
+* [Issue #198](https://github.com/json-c/json-c/issues/198) - Fix possible memory leak and remove superfluous NULL checks before free() \
+* [Issue #199](https://github.com/json-c/json-c/issues/199) - Fix build in Visual Studio \
+* [Issue #200](https://github.com/json-c/json-c/issues/200) - Add build scripts for CI platforms \
+* [Issue #201](https://github.com/json-c/json-c/issues/201) - disable forward-slash escaping? \
+* [Issue #202](https://github.com/json-c/json-c/issues/202) - Array with objects support \
+* [Issue #203](https://github.com/json-c/json-c/issues/203) - Add source position/coordinates to API \
+* [Issue #204](https://github.com/json-c/json-c/issues/204) - json-c/json.h not found \
+* [Issue #205](https://github.com/json-c/json-c/issues/205) - json-c Compiled with Visual Studios \
+* [Issue #206](https://github.com/json-c/json-c/issues/206) - what do i use in place of json_object_object_get? \
+* [Issue #207](https://github.com/json-c/json-c/issues/207) - Add support for property pairs directly added to arrays \
+* [Issue #208](https://github.com/json-c/json-c/issues/208) - Performance enhancements (mainly) to json_object_to_json_string() \
+* [Issue #209](https://github.com/json-c/json-c/issues/209) - fix regression from 2d549662be832da838aa063da2efa78ee3b99668 \
+* [Issue #210](https://github.com/json-c/json-c/issues/210) - Use size_t for arrays \
+* [Issue #211](https://github.com/json-c/json-c/issues/211) - Atomic updates for the refcount \
+* [Issue #212](https://github.com/json-c/json-c/issues/212) - Refcount doesn't work between threads \
+* [Issue #213](https://github.com/json-c/json-c/issues/213) - fix to compile with microsoft visual c++ 2010 \
+* [Issue #214](https://github.com/json-c/json-c/issues/214) - Some non-GNU systems support __sync_val_compare_and_swap \
+* [Issue #215](https://github.com/json-c/json-c/issues/215) - Build json-c for window 64 bit. \
+* [Issue #216](https://github.com/json-c/json-c/issues/216) - configure: check realloc with AC_CHECK_FUNCS() to fix cross-compilation. \
+* [Issue #217](https://github.com/json-c/json-c/issues/217) - Checking for functions in float.h \
+* [Issue #218](https://github.com/json-c/json-c/issues/218) - Use a macro to indicate C99 to the compiler \
+* [Issue #219](https://github.com/json-c/json-c/issues/219) - Fix various potential null ptr deref and int32 overflows \
+* [Issue #220](https://github.com/json-c/json-c/issues/220) - Add utility function for comparing json_objects \
+* [Issue #221](https://github.com/json-c/json-c/issues/221) - JSON_C_TO_STRING_NOSLASHESCAPE works incorrectly \
+* [Issue #222](https://github.com/json-c/json-c/issues/222) - Fix issue #221: JSON_C_TO_STRING_NOSLASHESCAPE works incorrectly \
+* [Issue #223](https://github.com/json-c/json-c/issues/223) - Clarify json_object_get_string documentation of NULL handling & return \
+* [Issue #224](https://github.com/json-c/json-c/issues/224) - json_tokener.c - all warnings being treated as errors \
+* [Issue #225](https://github.com/json-c/json-c/issues/225) - Hi, will you support clib as a "registry"? \
+* [Issue #227](https://github.com/json-c/json-c/issues/227) - Bump SOVERSION to 3 \
+* [Issue #228](https://github.com/json-c/json-c/issues/228) - avoid double slashes from json \
+* [Issue #229](https://github.com/json-c/json-c/issues/229) - configure fails: checking size of size_t... configure: error: cannot determine a size for size_t \
+* [Issue #230](https://github.com/json-c/json-c/issues/230) - Use stdint.h to check for size_t size \
+* [Issue #231](https://github.com/json-c/json-c/issues/231) - Fix size_t size check for first-time builds \
+* [Issue #232](https://github.com/json-c/json-c/issues/232) - tests/tests1: fix printf format for size_t arguments \
+* [Issue #233](https://github.com/json-c/json-c/issues/233) - Include stddef.h in json_object.h \
+* [Issue #234](https://github.com/json-c/json-c/issues/234) - Add public API to use userdata independently of custom serializer \
+* [Issue #235](https://github.com/json-c/json-c/issues/235) - Undefined symbols Error for architecture x86_64 on Mac \
+* [Issue #236](https://github.com/json-c/json-c/issues/236) - Building a project which uses json-c with flag -Wcast-qual causes compilation errors \
+* [Issue #237](https://github.com/json-c/json-c/issues/237) - handle escaped utf-8 \
+* [Issue #238](https://github.com/json-c/json-c/issues/238) - linkhash.c: optimised the table_free path \
+* [Issue #239](https://github.com/json-c/json-c/issues/239) - initialize null terminator of new printbuf \
+* [Issue #240](https://github.com/json-c/json-c/issues/240) - Compile error: Variable set but not used \
+* [Issue #241](https://github.com/json-c/json-c/issues/241) - getting error in date string 19\/07\/2016, fixed for error 19/07/2016 \
+* [Issue #242](https://github.com/json-c/json-c/issues/242) - json_tokener_parse error \
+* [Issue #243](https://github.com/json-c/json-c/issues/243) - Fix #165 \
+* [Issue #244](https://github.com/json-c/json-c/issues/244) - Error while compiling source from RHEL5, could you please help me to fix this \
+* [Issue #245](https://github.com/json-c/json-c/issues/245) - json-c compile in window xp \
+* [Issue #246](https://github.com/json-c/json-c/issues/246) - Mac: uselocale failed to build \
+* [Issue #247](https://github.com/json-c/json-c/issues/247) - json_object_array_del_idx function has segment fault error? \
+* [Issue #248](https://github.com/json-c/json-c/issues/248) - Minor changes in C source code \
+* [Issue #249](https://github.com/json-c/json-c/issues/249) - Improving README \
+* [Issue #250](https://github.com/json-c/json-c/issues/250) - Improving .gitignore \
+* [Issue #251](https://github.com/json-c/json-c/issues/251) - Adding a file for EditorConfig \
+* [Issue #252](https://github.com/json-c/json-c/issues/252) - Very minor changes not related to C source code \
+* [Issue #253](https://github.com/json-c/json-c/issues/253) - Adding a test with cppcheck for Travis CI \
+* [Issue #254](https://github.com/json-c/json-c/issues/254) - Very minor changes to some tests \
+* [Issue #255](https://github.com/json-c/json-c/issues/255) - Minor changes in C source code \
+* [Issue #256](https://github.com/json-c/json-c/issues/256) - Mailing list dead? \
+* [Issue #257](https://github.com/json-c/json-c/issues/257) - Defining a coding style \
+* [Issue #258](https://github.com/json-c/json-c/issues/258) - Enable CI services \
+* [Issue #259](https://github.com/json-c/json-c/issues/259) - Fails to parse valid json \
+* [Issue #260](https://github.com/json-c/json-c/issues/260) - Adding an object to itself \
+* [Issue #261](https://github.com/json-c/json-c/issues/261) - Lack of proper documentation \
+* [Issue #262](https://github.com/json-c/json-c/issues/262) - Add Cmakefile and fix compiler warning. \
+* [Issue #263](https://github.com/json-c/json-c/issues/263) - Compiler Warnings with VS2015 \
+* [Issue #264](https://github.com/json-c/json-c/issues/264) - successed in simple test   while failed in my project \
+* [Issue #265](https://github.com/json-c/json-c/issues/265) - Conformance report for reference \
+* [Issue #266](https://github.com/json-c/json-c/issues/266) - crash perhaps related to reference counting \
+* [Issue #267](https://github.com/json-c/json-c/issues/267) - Removes me as Win32 maintainer, because I'm not. \
+* [Issue #268](https://github.com/json-c/json-c/issues/268) - Documentation of json_object_to_json_string gives no information about memory management \
+* [Issue #269](https://github.com/json-c/json-c/issues/269) - json_object_<type>_set(json_object *o,<type> value) API for value setting in json object private structure \
+* [Issue #270](https://github.com/json-c/json-c/issues/270) - new API json_object_new_double_f(doubel d,const char * fmt); \
+* [Issue #271](https://github.com/json-c/json-c/issues/271) - Cannot compile using CMake on macOS \
+* [Issue #273](https://github.com/json-c/json-c/issues/273) - fixed wrong object name in json_object_all_values_equal \
+* [Issue #274](https://github.com/json-c/json-c/issues/274) - Support for 64 bit pointers on Windows \
+* [Issue #275](https://github.com/json-c/json-c/issues/275) - Out-of-bounds read in json_tokener_parse_ex \
+* [Issue #276](https://github.com/json-c/json-c/issues/276) - ./configure for centos release 6.7(final) failure \
+* [Issue #277](https://github.com/json-c/json-c/issues/277) - Json object set xxx \
+* [Issue #278](https://github.com/json-c/json-c/issues/278) - Serialization of double with no fractional component drops trailing zero \
+* [Issue #279](https://github.com/json-c/json-c/issues/279) - Segmentation fault in array_list_length() \
+* [Issue #280](https://github.com/json-c/json-c/issues/280) - Should json_object_array_get_idx  check whether input obj is array? \
+* [Issue #281](https://github.com/json-c/json-c/issues/281) - how to pretty print json-c? \
+* [Issue #282](https://github.com/json-c/json-c/issues/282) - ignore temporary files \
+* [Issue #283](https://github.com/json-c/json-c/issues/283) - json_pointer: add first revision based on RFC 6901 \
+* [Issue #284](https://github.com/json-c/json-c/issues/284) - Resusing  json_tokener object \
+* [Issue #285](https://github.com/json-c/json-c/issues/285) - Revert "compat/strdup.h: move common compat check for strdup() to own \
+* [Issue #286](https://github.com/json-c/json-c/issues/286) - json_tokener_parse_ex() returns json_tokener_continue on zero-length string \
+* [Issue #287](https://github.com/json-c/json-c/issues/287) - json_pointer: extend setter & getter with printf() style arguments \
+* [Issue #288](https://github.com/json-c/json-c/issues/288) - Fix _GNU_SOURCE define for vasprintf \
+* [Issue #289](https://github.com/json-c/json-c/issues/289) - bugfix: floating point representaion without fractional part \
+* [Issue #290](https://github.com/json-c/json-c/issues/290) - duplicate an json_object \
+* [Issue #291](https://github.com/json-c/json-c/issues/291) - isspace assert error \
+* [Issue #292](https://github.com/json-c/json-c/issues/292) - configure error  "./configure: line 13121: syntax error near unexpected token `-Wall'" \
+* [Issue #293](https://github.com/json-c/json-c/issues/293) - how to make with bitcode for ios \
+* [Issue #294](https://github.com/json-c/json-c/issues/294) - Adding UTF-8 validation.  Fixes #122 \
+* [Issue #295](https://github.com/json-c/json-c/issues/295) - cross compile w/ mingw \
+* [Issue #296](https://github.com/json-c/json-c/issues/296) - Missing functions header in json_object.h \
+* [Issue #297](https://github.com/json-c/json-c/issues/297) - could not parse string to Json object? Like string str=\"helloworld;E\\test\\log\\;end\" \
+* [Issue #298](https://github.com/json-c/json-c/issues/298) - Building using CMake doesn't work \
+* [Issue #299](https://github.com/json-c/json-c/issues/299) - Improve json_object -> string performance \
+* [Issue #300](https://github.com/json-c/json-c/issues/300) - Running tests with MinGW build \
+* [Issue #301](https://github.com/json-c/json-c/issues/301) - How to deep copy  json_object in C++ ? \
+* [Issue #302](https://github.com/json-c/json-c/issues/302) - json_tokener_parse_ex doesn't parse JSON values \
+* [Issue #303](https://github.com/json-c/json-c/issues/303) - fix doc in tokener header file \
+* [Issue #304](https://github.com/json-c/json-c/issues/304) - (.text+0x72846): undefined reference to `is_error' \
+* [Issue #305](https://github.com/json-c/json-c/issues/305) - Fix compilation without C-99 option \
+* [Issue #306](https://github.com/json-c/json-c/issues/306) - ./configure: line 12748 -error=deprecated-declarations \
+* [Issue #307](https://github.com/json-c/json-c/issues/307) - Memory leak in json_tokener_parse \
+* [Issue #308](https://github.com/json-c/json-c/issues/308) - AM_PROG_LIBTOOL not found on Linux \
+* [Issue #309](https://github.com/json-c/json-c/issues/309) - GCC 7 reports various -Wimplicit-fallthrough= errors \
+* [Issue #310](https://github.com/json-c/json-c/issues/310) - Add FALLTHRU comment to handle GCC7 warnings. \
+* [Issue #311](https://github.com/json-c/json-c/issues/311) - Fix error C3688 when compiling on Visual Studio 2015 \
+* [Issue #312](https://github.com/json-c/json-c/issues/312) - Fix CMake Build process improved for MinGW and MSYS2 \
+* [Issue #313](https://github.com/json-c/json-c/issues/313) - VERBOSE=1 make check; tests/test_util_file.test.c and tests/test_util_file.expected out of sync \
+* [Issue #315](https://github.com/json-c/json-c/issues/315) - Passing -1 to json_tokener_parse_ex is possibly unsafe \
+* [Issue #316](https://github.com/json-c/json-c/issues/316) - Memory Returned by json_object_to_json_string not freed \
+* [Issue #317](https://github.com/json-c/json-c/issues/317) - json_object_get_string gives segmentation error \
+* [Issue #318](https://github.com/json-c/json-c/issues/318) - PVS-Studio static analyzer analyze results \
+* [Issue #319](https://github.com/json-c/json-c/issues/319) - Windows: Fix dynamic library build with Visual Studio \
+* [Issue #320](https://github.com/json-c/json-c/issues/320) - Can't compile in Mac OS X El Capitan \
+* [Issue #321](https://github.com/json-c/json-c/issues/321) - build,cmake: fix vasprintf implicit definition and generate both static & shared libs \
+* [Issue #322](https://github.com/json-c/json-c/issues/322) - can not link with libjson-c.a \
+* [Issue #323](https://github.com/json-c/json-c/issues/323) - implicit fallthrough detected by gcc 7.1 \
+* [Issue #324](https://github.com/json-c/json-c/issues/324) - JsonPath like function? \
+* [Issue #325](https://github.com/json-c/json-c/issues/325) - Fix stack buffer overflow in json_object_double_to_json_string_format() \
+* [Issue #327](https://github.com/json-c/json-c/issues/327) - why json-c so hard to compile \
+* [Issue #328](https://github.com/json-c/json-c/issues/328) - json_object: implement json_object_deep_copy() function \
+* [Issue #329](https://github.com/json-c/json-c/issues/329) - build,cmake: build,cmake: rename libjson-c-static.a to libjson-c.a \
+* [Issue #330](https://github.com/json-c/json-c/issues/330) - tests: symlink basic tests to a single file that has the common code \
+* [Issue #331](https://github.com/json-c/json-c/issues/331) - Safe use of snprintf() / vsnprintf() for Visual studio, and thread-safety fix \
+* [Issue #332](https://github.com/json-c/json-c/issues/332) - Valgrind: invalid read after json_object_array_del_idx. \
+* [Issue #333](https://github.com/json-c/json-c/issues/333) - Replace obsolete AM_PROG_LIBTOOL \
+* [Issue #335](https://github.com/json-c/json-c/issues/335) - README.md: show build status tag from travis-ci.org \
+* [Issue #336](https://github.com/json-c/json-c/issues/336) - tests: fix tests in travis-ci.org \
+* [Issue #337](https://github.com/json-c/json-c/issues/337) - Synchronize "potentially racy" random seed in lh_char_hash() \
+* [Issue #338](https://github.com/json-c/json-c/issues/338) - implement json_object_int_inc(json_object *, int64_t) \
+* [Issue #339](https://github.com/json-c/json-c/issues/339) - Json schema validation \
+* [Issue #340](https://github.com/json-c/json-c/issues/340) - strerror_override: add extern "C" and JSON_EXPORT specifiers for Visual C++ compilers \
+* [Issue #341](https://github.com/json-c/json-c/issues/341) - character "/" parse as "\/" \
+* [Issue #342](https://github.com/json-c/json-c/issues/342) - No such file or directory "/usr/include/json.h" \
+* [Issue #343](https://github.com/json-c/json-c/issues/343) - Can't parse json \
+* [Issue #344](https://github.com/json-c/json-c/issues/344) - Fix Mingw build \
+* [Issue #345](https://github.com/json-c/json-c/issues/345) - Fix make dist and make distcheck \
+* [Issue #346](https://github.com/json-c/json-c/issues/346) - Clamp double to int32 when narrowing in json_object_get_int. \
+* [Issue #347](https://github.com/json-c/json-c/issues/347) - MSVC linker error json_c_strerror \
+* [Issue #348](https://github.com/json-c/json-c/issues/348) - why \
+* [Issue #349](https://github.com/json-c/json-c/issues/349) - `missing` is missing? \
+* [Issue #350](https://github.com/json-c/json-c/issues/350) - stderror-override and disable-shared \
+* [Issue #351](https://github.com/json-c/json-c/issues/351) - SIZE_T_MAX redefined from limits.h \
+* [Issue #352](https://github.com/json-c/json-c/issues/352) - `INSTALL` overrides an automake script. \
+* [Issue #353](https://github.com/json-c/json-c/issues/353) - Documentation issues \
+* [Issue #354](https://github.com/json-c/json-c/issues/354) - Fixes #351 #352 #353 \
+* [Issue #355](https://github.com/json-c/json-c/issues/355) - 1.make it can been compiled with Visual Studio 2010 by modify the CMakeList.txt and others \
+* [Issue #356](https://github.com/json-c/json-c/issues/356) - VS2008 test  test_util_file.cpp err! \
+* [Issue #357](https://github.com/json-c/json-c/issues/357) - __json_c_strerror incompatibility with link-time optimization \
+* [Issue #358](https://github.com/json-c/json-c/issues/358) - make issue \
+* [Issue #359](https://github.com/json-c/json-c/issues/359) - update CMakeLists.txt for compile with visual studio at least 2010 \
+* [Issue #360](https://github.com/json-c/json-c/issues/360) - Use strtoll() to parse ints \
+* [Issue #361](https://github.com/json-c/json-c/issues/361) - Fix double to int cast overflow in json_object_get_int64. \
+* [Issue #362](https://github.com/json-c/json-c/issues/362) - CMake Package Config \
+* [Issue #363](https://github.com/json-c/json-c/issues/363) - Issue #338, add json_object_add_int functions \
+* [Issue #364](https://github.com/json-c/json-c/issues/364) - Cmake is Errir \
+* [Issue #365](https://github.com/json-c/json-c/issues/365) - added fallthrough for gcc7 \
+* [Issue #366](https://github.com/json-c/json-c/issues/366) - how to check  the json string,crash! \
+* [Issue #367](https://github.com/json-c/json-c/issues/367) - Is json-c support "redirect" semantic? \
+* [Issue #368](https://github.com/json-c/json-c/issues/368) - Add examples \
+* [Issue #369](https://github.com/json-c/json-c/issues/369) - How to build json-c library for android? \
+* [Issue #370](https://github.com/json-c/json-c/issues/370) - Compiling using clang-cl \
+* [Issue #371](https://github.com/json-c/json-c/issues/371) - Invalid parsing for Infinity with json-c 0.12 \
+* [Issue #372](https://github.com/json-c/json-c/issues/372) - Json-c 0.12: Fixed Infinity bug \
+* [Issue #373](https://github.com/json-c/json-c/issues/373) - build: fix build on appveyor CI \
+* [Issue #374](https://github.com/json-c/json-c/issues/374) - Undefined symbols for architecture x86_64: \
+* [Issue #375](https://github.com/json-c/json-c/issues/375) - what would happened when json_object_object_add add the same key \
+* [Issue #376](https://github.com/json-c/json-c/issues/376) - Eclipse error \
+* [Issue #377](https://github.com/json-c/json-c/issues/377) - on gcc 7.2.0 on my linux distribution with json-c  2013-04-02 source \
+* [Issue #378](https://github.com/json-c/json-c/issues/378) - Eclipse: library (libjson-c) not found, but configured \
+* [Issue #379](https://github.com/json-c/json-c/issues/379) - error: this statement may fall through \[-Werror=implicit-fallthrough=\] \
+* [Issue #380](https://github.com/json-c/json-c/issues/380) - Build on Windows \
+* [Issue #381](https://github.com/json-c/json-c/issues/381) - Fix makedist \
+* [Issue #382](https://github.com/json-c/json-c/issues/382) - Memory leak for json_tokener_parse_ex for version 0.12.1 \
+* [Issue #383](https://github.com/json-c/json-c/issues/383) - Fix a compiler warning. \
+* [Issue #384](https://github.com/json-c/json-c/issues/384) - Fix a VS 2015 compiler warnings. \
+\n[end of issues_closed_for_0.13.md]\n[start of vasprintf_compat.h]\nvasprintf_compat.h
+#ifndef __vasprintf_compat_h
+#define __vasprintf_compat_h
+
+/**
+ * @file
+ * @brief Do not use, json-c internal, may be changed or removed at any time.
+ */
+
+#include "snprintf_compat.h"
+
+#include <stdlib.h>
+
+#if !defined(HAVE_VASPRINTF)
+/* CAW: compliant version of vasprintf */
+static int vasprintf(char **buf, const char *fmt, va_list ap)
+{
+#ifndef WIN32
+	static char _T_emptybuffer = '\0';
+#endif /* !defined(WIN32) */
+	int chars;
+	char *b;
+
+	if (!buf)
+	{
+		return -1;
+	}
+
+#ifdef WIN32
+	chars = _vscprintf(fmt, ap) + 1;
+#else  /* !defined(WIN32) */
+	/* CAW: RAWR! We have to hope to god here that vsnprintf doesn't overwrite
+	 * our buffer like on some 64bit sun systems.... but hey, its time to move on
+	 */
+	chars = vsnprintf(&_T_emptybuffer, 0, fmt, ap) + 1;
+	if (chars < 0)
+	{
+		chars *= -1;
+	} /* CAW: old glibc versions have this problem */
+#endif /* defined(WIN32) */
+
+	b = (char *)malloc(sizeof(char) * chars);
+	if (!b)
+	{
+		return -1;
+	}
+
+	if ((chars = vsprintf(b, fmt, ap)) < 0)
+	{
+		free(b);
+	}
+	else
+	{
+		*buf = b;
+	}
+
+	return chars;
+}
+#endif /* !HAVE_VASPRINTF */
+
+#endif /* __vasprintf_compat_h */
+\n[end of vasprintf_compat.h]\n[start of json_visit.h]\njson_visit.h
+
+#ifndef _json_c_json_visit_h_
+#define _json_c_json_visit_h_
+
+/**
+ * @file
+ * @brief Methods for walking a tree of objects.
+ */
+#include "json_object.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef int(json_c_visit_userfunc)(json_object *jso, int flags, json_object *parent_jso,
+                                   const char *jso_key, size_t *jso_index, void *userarg);
+
+/**
+ * Visit each object in the JSON hierarchy starting at jso.
+ * For each object, userfunc is called, passing the object and userarg.
+ * If the object has a parent (i.e. anything other than jso itself)
+ * its parent will be passed as parent_jso, and either jso_key or jso_index
+ * will be set, depending on whether the parent is an object or an array.
+ *
+ * Nodes will be visited depth first, but containers (arrays and objects)
+ * will be visited twice, the second time with JSON_C_VISIT_SECOND set in
+ * flags.
+ *
+ * userfunc must return one of the defined return values, to indicate
+ * whether and how to continue visiting nodes, or one of various ways to stop.
+ *
+ * Returns 0 if nodes were visited successfully, even if some were
+ *  intentionally skipped due to what userfunc returned.
+ * Returns <0 if an error occurred during iteration, including if
+ *  userfunc returned JSON_C_VISIT_RETURN_ERROR.
+ */
+JSON_EXPORT int json_c_visit(json_object *jso, int future_flags, json_c_visit_userfunc *userfunc,
+                             void *userarg);
+
+/**
+ * Passed to json_c_visit_userfunc as one of the flags values to indicate
+ * that this is the second time a container (array or object) is being
+ * called, after all of it's members have been iterated over.
+ */
+#define JSON_C_VISIT_SECOND 0x02
+
+/**
+ * This json_c_visit_userfunc return value indicates that iteration
+ * should proceed normally.
+ */
+#define JSON_C_VISIT_RETURN_CONTINUE 0
+
+/**
+ * This json_c_visit_userfunc return value indicates that iteration
+ * over the members of the current object should be skipped.
+ * If the current object isn't a container (array or object), this
+ * is no different than JSON_C_VISIT_RETURN_CONTINUE.
+ */
+#define JSON_C_VISIT_RETURN_SKIP 7547
+
+/**
+ * This json_c_visit_userfunc return value indicates that iteration
+ * of the fields/elements of the <b>containing</b> object should stop
+ * and continue "popped up" a level of the object hierarchy.
+ * For example, returning this when handling arg will result in
+ * arg3 and any other fields being skipped.   The next call to userfunc
+ * will be the JSON_C_VISIT_SECOND call on "foo", followed by a userfunc
+ * call on "bar".
+ * <pre>
+ * {
+ *   "foo": {
+ *     "arg1": 1,
+ *     "arg2": 2,
+ *     "arg3": 3,
+ *     ...
+ *   },
+ *   "bar": {
+ *     ...
+ *   }
+ * }
+ * </pre>
+ */
+#define JSON_C_VISIT_RETURN_POP 767
+
+/**
+ * This json_c_visit_userfunc return value indicates that iteration
+ * should stop immediately, and cause json_c_visit to return success.
+ */
+#define JSON_C_VISIT_RETURN_STOP 7867
+
+/**
+ * This json_c_visit_userfunc return value indicates that iteration
+ * should stop immediately, and cause json_c_visit to return an error.
+ */
+#define JSON_C_VISIT_RETURN_ERROR -1
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _json_c_json_visit_h_ */
+\n[end of json_visit.h]\n[start of arraylist.c]\narraylist.c
+/*
+ * $Id: arraylist.c,v 1.4 2006/01/26 02:16:28 mclark Exp $
+ *
+ * Copyright (c) 2004, 2005 Metaparadigm Pte. Ltd.
+ * Michael Clark <michael@metaparadigm.com>
+ *
+ * This library is free software; you can redistribute it and/or modify
+ * it under the terms of the MIT license. See COPYING for details.
+ *
+ */
+
+#include "config.h"
+
+#include <limits.h>
+
+#ifdef STDC_HEADERS
+#include <stdlib.h>
+#include <string.h>
+#endif /* STDC_HEADERS */
+
+#if defined(HAVE_STRINGS_H) && !defined(_STRING_H) && !defined(__USE_BSD)
+#include <strings.h>
+#endif /* HAVE_STRINGS_H */
+
+#ifndef SIZE_T_MAX
+#if SIZEOF_SIZE_T == SIZEOF_INT
+#define SIZE_T_MAX UINT_MAX
+#elif SIZEOF_SIZE_T == SIZEOF_LONG
+#define SIZE_T_MAX ULONG_MAX
+#elif SIZEOF_SIZE_T == SIZEOF_LONG_LONG
+#define SIZE_T_MAX ULLONG_MAX
+#else
+#error Unable to determine size of size_t
+#endif
+#endif
+
+#include "arraylist.h"
+
+struct array_list *array_list_new(array_list_free_fn *free_fn)
+{
+	return array_list_new2(free_fn, ARRAY_LIST_DEFAULT_SIZE);
+}
+
+struct array_list *array_list_new2(array_list_free_fn *free_fn, int initial_size)
+{
+	struct array_list *arr;
+
+	arr = (struct array_list *)malloc(sizeof(struct array_list));
+	if (!arr)
+		return NULL;
+	arr->size = initial_size;
+	arr->length = 0;
+	arr->free_fn = free_fn;
+	if (!(arr->array = (void **)malloc(arr->size * sizeof(void *))))
+	{
+		free(arr);
+		return NULL;
+	}
+	return arr;
+}
+
+extern void array_list_free(struct array_list *arr)
+{
+	size_t i;
+	for (i = 0; i < arr->length; i++)
+		if (arr->array[i])
+			arr->free_fn(arr->array[i]);
+	free(arr->array);
+	free(arr);
+}
+
+void *array_list_get_idx(struct array_list *arr, size_t i)
+{
+	if (i >= arr->length)
+		return NULL;
+	return arr->array[i];
+}
+
+static int array_list_expand_internal(struct array_list *arr, size_t max)
+{
+	void *t;
+	size_t new_size;
+
+	if (max < arr->size)
+		return 0;
+	/* Avoid undefined behaviour on size_t overflow */
+	if (arr->size >= SIZE_T_MAX / 2)
+		new_size = max;
+	else
+	{
+		new_size = arr->size << 1;
+		if (new_size < max)
+			new_size = max;
+	}
+	if (new_size > (~((size_t)0)) / sizeof(void *))
+		return -1;
+	if (!(t = realloc(arr->array, new_size * sizeof(void *))))
+		return -1;
+	arr->array = (void **)t;
+	arr->size = new_size;
+	return 0;
+}
+
+int array_list_shrink(struct array_list *arr, size_t empty_slots)
+{
+	void *t;
+	size_t new_size;
+
+	new_size = arr->length + empty_slots;
+	if (new_size == arr->size)
+		return 0;
+	if (new_size > arr->size)
+		return array_list_expand_internal(arr, new_size);
+	if (new_size == 0)
+		new_size = 1;
+
+	if (!(t = realloc(arr->array, new_size * sizeof(void *))))
+		return -1;
+	arr->array = (void **)t;
+	arr->size = new_size;
+	return 0;
+}
+
+//static inline int _array_list_put_idx(struct array_list *arr, size_t idx, void *data)
+int array_list_put_idx(struct array_list *arr, size_t idx, void *data)
+{
+	if (idx > SIZE_T_MAX - 1)
+		return -1;
+	if (array_list_expand_internal(arr, idx + 1))
+		return -1;
+	if (idx < arr->length && arr->array[idx])
+		arr->free_fn(arr->array[idx]);
+	arr->array[idx] = data;
+	if (idx > arr->length)
+	{
+		/* Zero out the arraylist slots in between the old length
+		   and the newly added entry so we know those entries are
+		   empty.
+		   e.g. when setting array[7] in an array that used to be 
+		   only 5 elements longs, array[5] and array[6] need to be
+		   set to 0.
+		 */
+		memset(arr->array + arr->length, 0, (idx - arr->length) * sizeof(void *));
+	}
+	if (arr->length <= idx)
+		arr->length = idx + 1;
+	return 0;
+}
+
+int array_list_add(struct array_list *arr, void *data)
+{
+	/* Repeat some of array_list_put_idx() so we can skip several
+	   checks that we know are unnecessary when appending at the end
+	 */
+	size_t idx = arr->length;
+	if (idx > SIZE_T_MAX - 1)
+		return -1;
+	if (array_list_expand_internal(arr, idx + 1))
+		return -1;
+	arr->array[idx] = data;
+	arr->length++;
+	return 0;
+}
+
+void array_list_sort(struct array_list *arr, int (*compar)(const void *, const void *))
+{
+	qsort(arr->array, arr->length, sizeof(arr->array[0]), compar);
+}
+
+void *array_list_bsearch(const void **key, struct array_list *arr,
+                         int (*compar)(const void *, const void *))
+{
+	return bsearch(key, arr->array, arr->length, sizeof(arr->array[0]), compar);
+}
+
+size_t array_list_length(struct array_list *arr)
+{
+	return arr->length;
+}
+
+int array_list_del_idx(struct array_list *arr, size_t idx, size_t count)
+{
+	size_t i, stop;
+
+	/* Avoid overflow in calculation with large indices. */
+	if (idx > SIZE_T_MAX - count)
+		return -1;
+	stop = idx + count;
+	if (idx >= arr->length || stop > arr->length)
+		return -1;
+	for (i = idx; i < stop; ++i)
+	{
+		// Because put_idx can skip entries, we need to check if
+		// there's actually anything in each slot we're erasing.
+		if (arr->array[i])
+			arr->free_fn(arr->array[i]);
+	}
+	memmove(arr->array + idx, arr->array + stop, (arr->length - stop) * sizeof(void *));
+	arr->length -= count;
+	return 0;
+}
+\n[end of arraylist.c]\n[start of json_object_iterator.c]\njson_object_iterator.c
+/**
+*******************************************************************************
+* @file json_object_iterator.c
+*
+* Copyright (c) 2009-2012 Hewlett-Packard Development Company, L.P.
+*
+* This library is free software; you can redistribute it and/or modify
+* it under the terms of the MIT license. See COPYING for details.
+*
+*******************************************************************************
+*/
+#include "config.h"
+
+#include <stddef.h>
+
+#include "json.h"
+#include "json_object_private.h"
+
+#include "json_object_iterator.h"
+
+/**
+ * How It Works
+ *
+ * For each JSON Object, json-c maintains a linked list of zero
+ * or more lh_entry (link-hash entry) structures inside the
+ * Object's link-hash table (lh_table).
+ *
+ * Each lh_entry structure on the JSON Object's linked list
+ * represents a single name/value pair.  The "next" field of the
+ * last lh_entry in the list is set to NULL, which terminates
+ * the list.
+ *
+ * We represent a valid iterator that refers to an actual
+ * name/value pair via a pointer to the pair's lh_entry
+ * structure set as the iterator's opaque_ field.
+ *
+ * We follow json-c's current pair list representation by
+ * representing a valid "end" iterator (one that refers past the
+ * last pair) with a NULL value in the iterator's opaque_ field.
+ *
+ * A JSON Object without any pairs in it will have the "head"
+ * field of its lh_table structure set to NULL.  For such an
+ * object, json_object_iter_begin will return an iterator with
+ * the opaque_ field set to NULL, which is equivalent to the
+ * "end" iterator.
+ *
+ * When iterating, we simply update the iterator's opaque_ field
+ * to point to the next lh_entry structure in the linked list.
+ * opaque_ will become NULL once we iterate past the last pair
+ * in the list, which makes the iterator equivalent to the "end"
+ * iterator.
+ */
+
+/// Our current representation of the "end" iterator;
+///
+/// @note May not always be NULL
+static const void *kObjectEndIterValue = NULL;
+
+/**
+ * ****************************************************************************
+ */
+struct json_object_iterator json_object_iter_begin(struct json_object *obj)
+{
+	struct json_object_iterator iter;
+	struct lh_table *pTable;
+
+	/// @note json_object_get_object will return NULL if passed NULL
+	///       or a non-json_type_object instance
+	pTable = json_object_get_object(obj);
+	JASSERT(NULL != pTable);
+
+	/// @note For a pair-less Object, head is NULL, which matches our
+	///       definition of the "end" iterator
+	iter.opaque_ = pTable->head;
+	return iter;
+}
+
+/**
+ * ****************************************************************************
+ */
+struct json_object_iterator json_object_iter_end(const struct json_object *obj)
+{
+	struct json_object_iterator iter;
+
+	JASSERT(NULL != obj);
+	JASSERT(json_object_is_type(obj, json_type_object));
+
+	iter.opaque_ = kObjectEndIterValue;
+
+	return iter;
+}
+
+/**
+ * ****************************************************************************
+ */
+void json_object_iter_next(struct json_object_iterator *iter)
+{
+	JASSERT(NULL != iter);
+	JASSERT(kObjectEndIterValue != iter->opaque_);
+
+	iter->opaque_ = ((const struct lh_entry *)iter->opaque_)->next;
+}
+
+/**
+ * ****************************************************************************
+ */
+const char *json_object_iter_peek_name(const struct json_object_iterator *iter)
+{
+	JASSERT(NULL != iter);
+	JASSERT(kObjectEndIterValue != iter->opaque_);
+
+	return (const char *)(((const struct lh_entry *)iter->opaque_)->k);
+}
+
+/**
+ * ****************************************************************************
+ */
+struct json_object *json_object_iter_peek_value(const struct json_object_iterator *iter)
+{
+	JASSERT(NULL != iter);
+	JASSERT(kObjectEndIterValue != iter->opaque_);
+
+	return (struct json_object *)lh_entry_v((const struct lh_entry *)iter->opaque_);
+}
+
+/**
+ * ****************************************************************************
+ */
+json_bool json_object_iter_equal(const struct json_object_iterator *iter1,
+                                 const struct json_object_iterator *iter2)
+{
+	JASSERT(NULL != iter1);
+	JASSERT(NULL != iter2);
+
+	return (iter1->opaque_ == iter2->opaque_);
+}
+
+/**
+ * ****************************************************************************
+ */
+struct json_object_iterator json_object_iter_init_default(void)
+{
+	struct json_object_iterator iter;
+
+	/**
+	 * @note Make this a negative, invalid value, such that
+	 *       accidental access to it would likely be trapped by the
+	 *       hardware as an invalid address.
+	 */
+	iter.opaque_ = NULL;
+
+	return iter;
+}
+\n[end of json_object_iterator.c]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.

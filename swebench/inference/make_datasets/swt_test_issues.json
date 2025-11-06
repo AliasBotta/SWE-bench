@@ -1,0 +1,17 @@
+[
+  {
+    "issue_url": "https://github.com/marshmallow-code/marshmallow/issues/1357",
+    "first_bfc": "f7e8062c5855818fe70786ef46cbfcf8a1d7c365",
+    "last_bfc": ""
+  },
+  {
+    "issue_url": "https://github.com/sqlfluff/sqlfluff/issues/1624",
+    "first_bfc": "05d172f8d5007bd644b4e2687589d14eda427956",
+    "last_bfc": ""
+  },
+  {
+    "issue_url": "https://github.com/marshmallow-code/marshmallow/issues/1342",
+    "first_bfc": "cf808fc8de9e215609d8128cbff1f300bae5a9c4",
+    "last_bfc": ""
+  }
+]

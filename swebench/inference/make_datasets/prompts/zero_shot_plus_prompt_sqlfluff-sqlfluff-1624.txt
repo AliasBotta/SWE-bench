@@ -1,0 +1,3596 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+TSQL - L031 incorrectly triggers "Avoid using aliases in join condition" when no join present
+
+## Expected Behaviour
+
+Both of these queries should pass, the only difference is the addition of a table alias 'a':
+
+1/ no alias
+
+```
+SELECT [hello]
+FROM
+    mytable
+```
+
+2/ same query with alias
+
+```
+SELECT a.[hello]
+FROM
+    mytable AS a
+```
+
+## Observed Behaviour
+
+1/ passes
+2/ fails with: L031: Avoid using aliases in join condition.
+
+But there is no join condition :-)
+
+## Steps to Reproduce
+
+Lint queries above
+
+## Dialect
+
+TSQL
+
+## Version
+
+sqlfluff 0.6.9
+Python 3.6.9
+
+## Configuration
+
+N/A
+</issue>
+
+<code>
+[start of util.py]\nutil.py
+#!/usr/bin/env python
+
+"""Utility strings for use during deployment.
+
+NB: This is not part of the core sqlfluff code.
+"""
+
+
+# This contains various utility scripts
+
+import shutil
+import os
+import click
+import time
+import subprocess
+import sys
+import oyaml as yaml
+import requests
+
+
+@click.group()
+def cli():
+    """Launch the utility cli."""
+    pass
+
+
+@cli.command()
+@click.option("--path", default=".test-reports")
+def clean_tests(path):
+    """Clear up the tests directory.
+
+    NB: Using scripts allows platform independence
+    Makes a new one afterward
+    """
+    try:
+        shutil.rmtree(path)
+        click.echo(f"Removed {path!r}...")
+    # OSError is for python 27
+    # in py36 its FileNotFoundError (but that inherits from IOError, which exists in py27)
+    except OSError:
+        click.echo(f"Directory {path!r} does not exist. Skipping...")
+
+    os.mkdir(path)
+    click.echo(f"Created {path!r}")
+
+
+@cli.command()
+@click.argument("cmd", nargs=-1)
+@click.option("--from-file", "-f", default=None)
+@click.option("--runs", default=3, show_default=True)
+def benchmark(cmd, runs, from_file):
+    """Benchmark how long it takes to run a particular command."""
+    if from_file:
+        with open(from_file) as yaml_file:
+            parsed = yaml.load(yaml_file.read(), Loader=yaml.FullLoader)
+            benchmarks = parsed["benchmarks"]
+            click.echo(repr(benchmarks))
+    elif cmd:
+        benchmarks = [{"name": str(hash(cmd)), "cmd": cmd}]
+    else:
+        click.echo("No command or file specified!")
+        sys.exit(1)
+
+    commit_hash = None
+    post_results = False
+    # Try and detect a CI environment
+    if "CI" in os.environ:
+        click.echo("CI detected!")
+        # available_vars = [var for var in os.environ.keys()]  # if var.startswith('CIRCLE')
+        # click.echo("Available keys: {0!r}".format(available_vars))
+        commit_hash = os.environ.get("GITHUB_SHA", None)
+        post_results = True
+        click.echo(f"Commit hash is: {commit_hash!r}")
+
+    all_results = {}
+    for run_no in range(runs):
+        click.echo(f"===== Run #{run_no + 1} =====")
+        results = {}
+        for benchmark in benchmarks:
+            # Iterate through benchmarks
+            click.echo("Starting benchmark: {!r}".format(benchmark["name"]))
+            t0 = time.monotonic()
+            click.echo("===START PROCESS OUTPUT===")
+            process = subprocess.run(benchmark["cmd"])
+            click.echo("===END PROCESS OUTPUT===")
+            t1 = time.monotonic()
+            if process.returncode != 0:
+                if benchmark["cmd"][0] == "sqlfluff" and benchmark["cmd"][1] == "fix":
+                    # Allow fix to fail as not all our benchmark errors are fixable
+                    click.echo(
+                        f"Fix command failed with return code: {process.returncode}"
+                    )
+                else:
+                    click.echo(f"Command failed with return code: {process.returncode}")
+                    sys.exit(process.returncode)
+            else:
+                duration = t1 - t0
+                click.echo(f"Process completed in {duration:.4f}s")
+                results[benchmark["name"]] = duration
+
+        if post_results:
+            click.echo(f"Posting results: {results}")
+            resp = requests.post(
+                "https://f32cvv8yh3.execute-api.eu-west-1.amazonaws.com/result/gh/{repo}/{commit}".format(
+                    # TODO: update the stats collector eventually to allow the new repo path
+                    repo="alanmcruickshank/sqlfluff",
+                    commit=commit_hash,
+                ),
+                params={"key": "mtqTC1fVVebVQ5BVREP7jYrKwgjaO0IfRILzyZt"},
+                json=results,
+            )
+            click.echo(resp.text)
+        all_results[run_no] = results
+    click.echo("===== Done =====")
+    for run_no in all_results:
+        click.echo("Run {:>5}: {}".format(f"#{run_no}", all_results[run_no]))
+
+
+if __name__ == "__main__":
+    cli()
+\n[end of util.py]\n[start of setup.py]\nsetup.py
+#!/usr/bin/env python
+
+"""The script for setting up sqlfluff."""
+
+
+import sys
+
+if sys.version_info[0] < 3:
+    raise Exception("SQLFluff does not support Python 2. Please upgrade to Python 3.")
+
+import configparser
+from os.path import dirname
+from os.path import join
+
+from setuptools import find_packages, setup
+
+
+# Get the global config info as currently stated
+# (we use the config file to avoid actually loading any python here)
+config = configparser.ConfigParser()
+config.read(["src/sqlfluff/config.ini"])
+version = config.get("sqlfluff", "version")
+
+
+def read(*names, **kwargs):
+    """Read a file and return the contents as a string."""
+    return open(
+        join(dirname(__file__), *names), encoding=kwargs.get("encoding", "utf8")
+    ).read()
+
+
+setup(
+    name="sqlfluff",
+    version=version,
+    license="MIT License",
+    description="The SQL Linter for Humans",
+    long_description=read("README.md"),
+    # Make sure pypi is expecting markdown!
+    long_description_content_type="text/markdown",
+    author="Alan Cruickshank",
+    author_email="alan@designingoverload.com",
+    url="https://github.com/sqlfluff/sqlfluff",
+    python_requires=">=3.6",
+    keywords=[
+        "sqlfluff",
+        "sql",
+        "linter",
+        "formatter",
+        "bigquery",
+        "exasol",
+        "hive",
+        "mysql",
+        "postgres",
+        "snowflake",
+        "sqlite",
+        "teradata",
+        "tsql",
+        "dbt",
+    ],
+    project_urls={
+        "Homepage": "https://www.sqlfluff.com",
+        "Documentation": "https://docs.sqlfluff.com",
+        "Changes": "https://github.com/sqlfluff/sqlfluff/blob/main/CHANGELOG.md",
+        "Source": "https://github.com/sqlfluff/sqlfluff",
+        "Issue Tracker": "https://github.com/sqlfluff/sqlfluff/issues",
+        "Twitter": "https://twitter.com/SQLFluff",
+        "Chat": "https://github.com/sqlfluff/sqlfluff#sqlfluff-on-slack",
+    },
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    include_package_data=True,
+    classifiers=[
+        # complete classifier list: http://pypi.python.org/pypi?%3Aaction=list_classifiers
+        "Development Status :: 4 - Beta",
+        # 'Development Status :: 5 - Production/Stable',
+        "Environment :: Console",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: Unix",
+        "Operating System :: POSIX",
+        "Operating System :: MacOS",
+        "Operating System :: Microsoft :: Windows",
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: Implementation :: CPython",
+        "Programming Language :: Python :: Implementation :: PyPy",
+        "Topic :: Utilities",
+        "Topic :: Software Development :: Quality Assurance",
+    ],
+    install_requires=[
+        # Core
+        "click>=7.1",
+        "colorama>=0.3",
+        "configparser",
+        "oyaml",
+        "Jinja2",
+        # Used for diffcover plugin
+        "diff-cover>=2.5.0",
+        # Used for .sqlfluffignore
+        "pathspec",
+        # Used for finding os-specific application config dirs
+        "appdirs",
+        # Cached property for performance gains
+        "cached-property",
+        # dataclasses backport for python 3.6
+        "dataclasses; python_version < '3.7'",
+        # better type hints for older python versions
+        "typing_extensions",
+        # We provide a testing library for plugins in sqlfluff.testing
+        "pytest",
+        # For parsing pyproject.toml
+        "toml",
+        # For returning exceptions from multiprocessing.Pool.map()
+        "tblib",
+    ],
+    entry_points={
+        "console_scripts": [
+            "sqlfluff = sqlfluff.cli.commands:cli",
+        ],
+        "diff_cover": ["sqlfluff = sqlfluff.diff_quality_plugin"],
+        "sqlfluff": ["sqlfluff = sqlfluff.core.plugin.lib"],
+    },
+)
+\n[end of setup.py]\n[start of test/test_testing.py]\ntest/test_testing.py
+"""Test the sqlfluff.testing module."""
+
+from _pytest.outcomes import Failed, Skipped
+import pytest
+from sqlfluff.testing.rules import (
+    assert_rule_fail_in_sql,
+    assert_rule_pass_in_sql,
+    rules__test_helper,
+    RuleTestCase,
+)
+
+
+def test_assert_rule_fail_in_sql_handle_parse_error():
+    """Util assert_rule_fail_in_sql should handle parse errors."""
+    with pytest.raises(Failed) as failed_test:
+        assert_rule_fail_in_sql(code="L000", sql="select from")
+    failed_test.match("Found the following parse errors in test case:")
+
+
+def test_assert_rule_fail_in_sql_should_fail_queries_that_unexpectedly_pass():
+    """Util assert_rule_fail_in_sql should fail tests when a query passes rules that it violates."""
+    with pytest.raises(Failed) as failed_test:
+        assert_rule_fail_in_sql(code="L001", sql="select 1")
+    failed_test.match("No L001 failures found in query which should fail")
+
+
+def test_assert_rule_pass_in_sql_should_handle_parse_error():
+    """Util assert_rule_pass_in_sql should handle parse errors."""
+    with pytest.raises(Failed) as failed_test:
+        assert_rule_pass_in_sql(code="L001", sql="select from")
+    failed_test.match("Found unparsable section:")
+
+
+def test_assert_rule_pass_in_sql_should_fail_when_there_are_violations():
+    """Util assert_rule_pass_in_sql should fail when there are violations."""
+    with pytest.raises(Failed) as failed_test:
+        assert_rule_pass_in_sql(code="L005", sql="select a , b from t")
+    failed_test.match("Found L005 failures in query which should pass")
+
+
+def test_rules__test_helper_skipped_when_test_case_skipped():
+    """Util rules__test_helper should skip the test when test case is "skipped"."""
+    rule_test_case = RuleTestCase(skip="Skip this one for now")
+    with pytest.raises(Skipped) as skipped_test:
+        rules__test_helper(rule_test_case)
+    skipped_test.match("Skip this one for now")
+
+
+def test_rules__test_helper_has_variable_introspection():
+    """Make sure the helper gives variable introspection information on failure."""
+    rule_test_case = RuleTestCase(
+        rule="L003",
+        fail_str="""
+            select
+                a,
+                    b
+            from table
+        """,
+        # extra comma on purpose
+        fix_str="""
+            select
+                a,
+                b,
+            from table
+        """,
+    )
+    with pytest.raises(AssertionError) as skipped_test:
+        rules__test_helper(rule_test_case)
+    # Enough to check that a query diff is displayed
+    skipped_test.match("select")
+\n[end of test/test_testing.py]\n[start of test/conftest.py]\ntest/conftest.py
+"""Common Test Fixtures."""
+import hashlib
+import io
+import os
+
+import pytest
+import oyaml
+
+from sqlfluff.cli.commands import quoted_presenter
+from sqlfluff.core import FluffConfig
+from sqlfluff.core.parser import Parser, Lexer
+from sqlfluff.core.parser.markers import PositionMarker
+from sqlfluff.core.parser.segments import (
+    Indent,
+    Dedent,
+    WhitespaceSegment,
+    NewlineSegment,
+    SymbolSegment,
+    CommentSegment,
+    CodeSegment,
+)
+from sqlfluff.core.templaters import TemplatedFile
+
+# When writing YAML files, double quotes string values needing escapes.
+oyaml.add_representer(str, quoted_presenter)
+
+
+def get_parse_fixtures(fail_on_missing_yml=False):
+    """Search for all parsing fixtures."""
+    parse_success_examples = []
+    parse_structure_examples = []
+    # Generate the filenames for each dialect from the parser test directory
+    for d in os.listdir(os.path.join("test", "fixtures", "dialects")):
+        # Ignore documentation
+        if d.endswith(".md"):
+            continue
+        # assume that d is now the name of a dialect
+        dirlist = os.listdir(os.path.join("test", "fixtures", "dialects", d))
+        for f in dirlist:
+            has_yml = False
+            if f.endswith(".sql"):
+                root = f[:-4]
+                # only look for sql files
+                parse_success_examples.append((d, f))
+                # Look for the code_only version of the structure
+                y = root + ".yml"
+                if y in dirlist:
+                    parse_structure_examples.append((d, f, True, y))
+                    has_yml = True
+                # Look for the non-code included version of the structure
+                y = root + "_nc.yml"
+                if y in dirlist:
+                    parse_structure_examples.append((d, f, False, y))
+                    has_yml = True
+                if not has_yml and fail_on_missing_yml:
+                    raise (
+                        Exception(
+                            f"Missing .yml file for {os.path.join(d, f)}. Run the test/generate_parse_fixture_yml.py script!"
+                        )
+                    )
+    return parse_success_examples, parse_structure_examples
+
+
+def make_dialect_path(dialect, fname):
+    """Work out how to find paths given a dialect and a file name."""
+    return os.path.join("test", "fixtures", "dialects", dialect, fname)
+
+
+def load_file(dialect, fname):
+    """Load a file."""
+    with open(make_dialect_path(dialect, fname)) as f:
+        raw = f.read()
+    return raw
+
+
+def process_struct(obj):
+    """Process a nested dict or dict-like into a check tuple."""
+    if isinstance(obj, dict):
+        return tuple((k, process_struct(obj[k])) for k in obj)
+    elif isinstance(obj, list):
+        # We'll assume that it's a list of dicts
+        if isinstance(obj[0], dict):
+            buff = [process_struct(elem) for elem in obj]
+            if any(len(elem) > 1 for elem in buff):
+                raise ValueError(f"Not sure how to deal with multi key dict: {buff!r}")
+            return tuple(elem[0] for elem in buff)
+        else:
+            raise TypeError(f"Did not expect a list of {type(obj[0])}: {obj[0]!r}")
+    elif isinstance(obj, (str, int, float)):
+        return str(obj)
+    elif obj is None:
+        return None
+    else:
+        raise TypeError(f"Not sure how to deal with type {type(obj)}: {obj!r}")
+
+
+def parse_example_file(dialect, sqlfile):
+    """Parse example SQL file, return parse tree."""
+    config = FluffConfig(overrides=dict(dialect=dialect))
+    # Load the SQL
+    raw = load_file(dialect, sqlfile)
+    # Lex and parse the file
+    tokens, _ = Lexer(config=config).lex(raw)
+    tree = Parser(config=config).parse(tokens)
+    return tree
+
+
+def compute_parse_tree_hash(tree):
+    """Given a parse tree, compute a consistent hash value for it."""
+    if tree:
+        r = tree.as_record(code_only=True, show_raw=True)
+        if r:
+            r_io = io.StringIO()
+            oyaml.dump(r, r_io)
+            result = hashlib.blake2s(r_io.getvalue().encode("utf-8")).hexdigest()
+            return result
+    return None
+
+
+def load_yaml(fpath):
+    """Load a yaml structure and process it into a tuple."""
+    # Load raw file
+    with open(fpath) as f:
+        raw = f.read()
+    # Parse the yaml
+    obj = oyaml.safe_load(raw)
+    # Return the parsed and structured object
+    _hash = None
+    if obj:
+        _hash = obj.pop("_hash", None)
+    processed = process_struct(obj)
+    if processed:
+        return _hash, process_struct(obj)[0]
+    else:
+        return None, None
+
+
+@pytest.fixture()
+def yaml_loader():
+    """Return a yaml loading function."""
+    # Return a function
+    return load_yaml
+
+
+@pytest.fixture(scope="module")
+def generate_test_segments():
+    """Roughly generate test segments.
+
+    This is a factory function so that it works as a fixture,
+    but when actually used, this will return the inner function
+    which is what you actually need.
+    """
+
+    def generate_test_segments_func(elems):
+        """Roughly generate test segments.
+
+        This function isn't totally robust, but good enough
+        for testing. Use with caution.
+        """
+        buff = []
+        raw_file = "".join(elems)
+        templated_file = TemplatedFile.from_string(raw_file)
+        idx = 0
+
+        for elem in elems:
+            if elem == "<indent>":
+                buff.append(
+                    Indent(
+                        pos_marker=PositionMarker.from_point(idx, idx, templated_file)
+                    )
+                )
+                continue
+            elif elem == "<dedent>":
+                buff.append(
+                    Dedent(
+                        pos_marker=PositionMarker.from_point(idx, idx, templated_file)
+                    )
+                )
+                continue
+
+            seg_kwargs = {}
+
+            if set(elem) <= {" ", "\t"}:
+                SegClass = WhitespaceSegment
+            elif set(elem) <= {"\n"}:
+                SegClass = NewlineSegment
+            elif elem == "(":
+                SegClass = SymbolSegment
+                seg_kwargs = {"name": "bracket_open"}
+            elif elem == ")":
+                SegClass = SymbolSegment
+                seg_kwargs = {"name": "bracket_close"}
+            elif elem.startswith("--"):
+                SegClass = CommentSegment
+                seg_kwargs = {"name": "inline_comment"}
+            elif elem.startswith('"'):
+                SegClass = CodeSegment
+                seg_kwargs = {"name": "double_quote"}
+            elif elem.startswith("'"):
+                SegClass = CodeSegment
+                seg_kwargs = {"name": "single_quote"}
+            else:
+                SegClass = CodeSegment
+
+            # Set a none position marker which we'll realign at the end.
+            buff.append(
+                SegClass(
+                    raw=elem,
+                    pos_marker=PositionMarker(
+                        slice(idx, idx + len(elem)),
+                        slice(idx, idx + len(elem)),
+                        templated_file,
+                    ),
+                    **seg_kwargs,
+                )
+            )
+            idx += len(elem)
+
+        return tuple(buff)
+
+    # Return the function
+    return generate_test_segments_func
+\n[end of test/conftest.py]\n[start of test/__init__.py]\ntest/__init__.py
+"""Init PY for tests."""
+\n[end of test/__init__.py]\n[start of test/diff_quality_plugin_test.py]\ntest/diff_quality_plugin_test.py
+"""Tests for the SQLFluff integration with the "diff-quality" tool."""
+
+import sys
+
+import pytest
+
+try:
+    from sqlfluff import diff_quality_plugin
+except ImportError:
+    pass
+
+
+@pytest.mark.parametrize(
+    "sql_path,expected_violations_lines",
+    [
+        ("test/fixtures/linter/indentation_errors.sql", list(range(2, 7))),
+        ("test/fixtures/linter/parse_error.sql", {1}),
+        # NB: This version of the file is in a directory configured
+        # to ignore parsing errors.
+        ("test/fixtures/linter/diffquality/parse_error.sql", []),
+    ],
+)
+@pytest.mark.skipif(
+    sys.version_info[:2] == (3, 4),
+    reason="requires diff_cover package, which does not support python3.4",
+)
+def test_diff_quality_plugin(sql_path, expected_violations_lines):
+    """Test the plugin at least finds errors on the expected lines."""
+    violation_reporter = diff_quality_plugin.diff_cover_report_quality()
+    violations = violation_reporter.violations(sql_path)
+    assert isinstance(violations, list)
+    if expected_violations_lines:
+        assert len(violations) > 0
+        violations_lines = {v.line for v in violations}
+        for expected_line in expected_violations_lines:
+            assert expected_line in violations_lines
+    else:
+        assert len(violations) == 0
+\n[end of test/diff_quality_plugin_test.py]\n[start of test/generate_parse_fixture_yml.py]\ntest/generate_parse_fixture_yml.py
+"""Utility to generate yml files for all the parsing examples."""
+import multiprocessing
+import os
+
+import oyaml as yaml
+
+from conftest import compute_parse_tree_hash, get_parse_fixtures, parse_example_file
+
+
+def generate_parse_fixture(example):
+    """Parse example SQL file, write parse tree to YAML file."""
+    dialect, sqlfile = example
+    tree = parse_example_file(dialect, sqlfile)
+    _hash = compute_parse_tree_hash(tree)
+    # Remove the .sql file extension
+    root = sqlfile[:-4]
+    path = os.path.join("test", "fixtures", "dialects", dialect, root + ".yml")
+    with open(path, "w", newline="\n") as f:
+        r = None
+        if tree:
+            r = dict(
+                [("_hash", _hash)]
+                + list(tree.as_record(code_only=True, show_raw=True).items())
+            )
+            print(
+                "# YML test files are auto-generated from SQL files and should not be edited by",
+                '# hand. To help enforce this, the "hash" field in the file must match a hash',
+                "# computed by SQLFluff when running the tests. Please run",
+                "# `python test/generate_parse_fixture_yml.py`  to generate them after adding or",
+                "# altering SQL files.",
+                file=f,
+                sep="\n",
+            )
+            yaml.dump(r, f, default_flow_style=False)
+        else:
+            f.write("")
+
+
+def main():
+    """Find all example SQL files, parse and create YAML files."""
+    parse_success_examples, _ = get_parse_fixtures()
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for _ in pool.imap_unordered(generate_parse_fixture, parse_success_examples):
+            pass
+
+
+if __name__ == "__main__":
+    main()
+\n[end of test/generate_parse_fixture_yml.py]\n[start of examples/02_timing_api_steps.py]\nexamples/02_timing_api_steps.py
+"""Performance testing on parsing and lexing."""
+
+import timeit
+
+from sqlfluff.core import Lexer, Parser, Linter
+
+# Set up and output the query
+sql = "SeLEct  *, 1, blah as  fOO  from myTable"
+print("Query: ", repr(sql))
+
+
+def time_function(func, name, iterations=20):
+    """A basic timing function."""
+    # Do the timing
+    time = timeit.timeit(func, number=iterations) / iterations
+    # Output the result
+    print(
+        "{:<35} {:.6}s [{} iterations]".format(
+            f"Time to {name}:",
+            time,
+            iterations,
+        )
+    )
+
+
+# Set up some classes to process the data
+lexer = Lexer()
+parser = Parser()
+linter = Linter()
+
+# Pre-process the lexing step for the parsing step
+tokens, _ = lexer.lex(sql)
+# Pre-process the parsing step for the linting and parsing step
+parsed = parser.parse(tokens)
+
+# Time the steps
+time_function(lambda: lexer.lex(sql), name="lex")
+time_function(lambda: parser.parse(tokens, recurse=0), name="parse (one level only)")
+time_function(lambda: parser.parse(tokens), name="parse (recursive)")
+time_function(lambda: linter.lint(parsed), name="lint")
+time_function(lambda: linter.fix(parsed), name="fix")
+\n[end of examples/02_timing_api_steps.py]\n[start of examples/01_basic_api_usage.py]\nexamples/01_basic_api_usage.py
+"""This is an example of how to use the simple sqlfluff api."""
+
+import sqlfluff
+
+#  -------- LINTING ----------
+
+my_bad_query = "SeLEct  *, 1, blah as  fOO  from myTable"
+
+# Lint the given string and get a list of violations found.
+result = sqlfluff.lint(my_bad_query, dialect="bigquery")
+
+# result =
+# [
+#     {"code": "L010", "line_no": 1, "line_pos": 1, "description": "Keywords must be consistently upper case."}
+#     ...
+# ]
+
+#  -------- FIXING ----------
+
+# Fix the given string and get a string back which has been fixed.
+result = sqlfluff.fix(my_bad_query, dialect="bigquery")
+# result = 'SELECT  *, 1, blah AS  foo  FROM mytable\n'
+
+# We can also fix just specific rules.
+result = sqlfluff.fix(my_bad_query, rules="L010")
+# result = 'SELECT  *, 1, blah AS  fOO  FROM myTable'
+
+# Or a subset of rules...
+result = sqlfluff.fix(my_bad_query, rules=["L010", "L014"])
+# result = 'SELECT  *, 1, blah AS  fOO  FROM mytable'
+
+#  -------- PARSING ----------
+# NOTE: sqlfluff is still in a relatively early phase of its
+# development and so until version 1.0.0 will offer no guarantee
+# that the names and structure of the objects returned by these
+# parse commands won't change between releases. Use with care
+# and keep updated with the changelog for the project for any
+# changes in this space.
+
+parsed = sqlfluff.parse(my_bad_query)
+
+# Get the structure of the query
+structure = parsed.tree.to_tuple(show_raw=True, code_only=True)
+# structure = ('file', (('statement', (('select_statement', (('select_clause', (('keyword', 'SeLEct'), ...
+
+# Extract certain elements
+keywords = [keyword.raw for keyword in parsed.tree.recursive_crawl("keyword")]
+# keywords = ['SeLEct', 'as', 'from']
+tbl_refs = [tbl_ref.raw for tbl_ref in parsed.tree.recursive_crawl("table_reference")]
+# tbl_refs == ["myTable"]
+\n[end of examples/01_basic_api_usage.py]\n[start of examples/03_extracting_references.py]\nexamples/03_extracting_references.py
+"""This is an example of how to extract table names."""
+
+import sqlfluff
+
+query_with_ctes = """
+WITH foo AS (SELECT * FROM bar.bar),
+baz AS (SELECT * FROM bap)
+SELECT * FROM foo
+INNER JOIN baz USING (user_id)
+INNER JOIN ban USING (user_id)
+"""
+
+#  -------- PARSING ----------
+parsed = sqlfluff.parse(query_with_ctes)
+
+#  -------- EXTRACTION ----------
+# Under the hood we look for all of the table references
+# which aren't also CTE aliases.
+external_tables = parsed.tree.get_table_references()
+# external_tables == {'bar.bar', 'bap', 'ban'}
+\n[end of examples/03_extracting_references.py]\n[start of examples/04_getting_rules_and_dialects.py]\nexamples/04_getting_rules_and_dialects.py
+"""This is an example of how get basic options from sqlfluff."""
+
+import sqlfluff
+
+#  -------- DIALECTS ----------
+
+dialects = sqlfluff.list_dialects()
+# dialects = [DialectTuple(label='ansi', name='ansi', inherits_from='nothing'), ...]
+dialect_names = [dialect.label for dialect in dialects]
+# dialect_names = ["ansi", "snowflake", ...]
+
+
+#  -------- RULES ----------
+
+rules = sqlfluff.list_rules()
+# rules = [RuleTuple(code='Example_L001', description='ORDER BY on these columns is forbidden!'), ...]
+rule_codes = [rule.code for rule in rules]
+# rule_codes = ["L001", "L002", ...]
+\n[end of examples/04_getting_rules_and_dialects.py]\n[start of docs/source/conf.py]\ndocs/source/conf.py
+"""Configuration file for the Sphinx documentation builder.
+
+This file only contains a selection of the most common options. For a full
+list see the documentation:
+https://www.sphinx-doc.org/en/master/usage/configuration.html
+"""
+
+import configparser
+
+# -- Path setup --------------------------------------------------------------
+
+# If extensions (or modules to document with autodoc) are in another directory,
+# add these directories to sys.path here. If the directory is relative to the
+# documentation root, use os.path.abspath to make it absolute, like shown here.
+#
+# import os
+# import sys
+# sys.path.insert(0, os.path.abspath('.'))
+
+# Get the global config info as currently stated
+# (we use the config file to avoid actually loading any python here)
+config = configparser.ConfigParser()
+config.read(["../../src/sqlfluff/config.ini"])
+stable_version = config.get("sqlfluff", "stable_version")
+
+# -- Project information -----------------------------------------------------
+
+project = "SQLFluff"
+copyright = "2019, Alan Cruickshank"
+author = "Alan Cruickshank"
+
+# The full version, including alpha/beta/rc tags
+release = stable_version
+
+
+# -- General configuration ---------------------------------------------------
+
+# Add any Sphinx extension module names here, as strings. They can be
+# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
+# ones.
+extensions = [
+    # Autodocumentation from docstrings
+    "sphinx.ext.autodoc",
+    # Allow Google style docstrings
+    "sphinx.ext.napoleon",
+    # Documenting click commands
+    "sphinx_click.ext",
+]
+
+# Add any paths that contain templates here, relative to this directory.
+templates_path = ["_templates"]
+
+# List of patterns, relative to source directory, that match files and
+# directories to ignore when looking for source files.
+# This pattern also affects html_static_path and html_extra_path.
+exclude_patterns = []
+
+# Master doc
+master_doc = "index"
+
+# If true, the current module name will be prepended to all description
+# unit titles (such as .. function::).
+add_module_names = False
+
+
+# -- Options for HTML output -------------------------------------------------
+
+# The theme to use for HTML and HTML Help pages.  See the documentation for
+# a list of builtin themes.
+#
+html_theme = "alabaster"
+html_favicon = "favicon-fluff.png"
+
+# Add any paths that contain custom static files (such as style sheets) here,
+# relative to this directory. They are copied after the builtin static files,
+# so a file named "default.css" will overwrite the builtin "default.css".
+html_static_path = ["_static"]
+
+# -- Options for Alabaster Theme ---------------------------------------------
+
+html_theme_options = {
+    # Set branch to main (used by Codecov button)
+    "badge_branch": "main",
+    "logo": "images/sqlfluff-lrg.png",
+    # Icon for iOS shortcuts
+    "touch_icon": "images/sqlfluff-sm2-sq.png",
+    "github_user": "sqlfluff",
+    "github_repo": "sqlfluff",
+    # GitHub Fork button
+    "github_banner": True,
+    # GitHub star button
+    "github_type": "star",
+    # Use `"true"` instead of `True` for counting GitHub star, see https://ghbtns.com for details
+    "github_count": "true",
+    # Codecov button
+    "codecov_button": True,
+}
+
+
+def ultimate_replace(app, docname, source):
+    """Replaces variables in docs, including code blocks.
+
+    From: https://github.com/sphinx-doc/sphinx/issues/4054#issuecomment-329097229
+    """
+    result = source[0]
+    for key in app.config.ultimate_replacements:
+        result = result.replace(key, app.config.ultimate_replacements[key])
+    source[0] = result
+
+
+ultimate_replacements = {"|release|": release}
+
+
+def setup(app):
+    """Configures the documentation app."""
+    app.add_config_value("ultimate_replacements", {}, True)
+    app.connect("source-read", ultimate_replace)
+\n[end of docs/source/conf.py]\n[start of plugins/sqlfluff-templater-dbt/setup.py]\nplugins/sqlfluff-templater-dbt/setup.py
+"""Setup file for example plugin."""
+from setuptools import setup
+from os.path import dirname, join
+
+
+def read(*names, **kwargs):
+    """Read a file and return the contents as a string."""
+    return open(
+        join(dirname(__file__), *names), encoding=kwargs.get("encoding", "utf8")
+    ).read()
+
+
+setup(
+    name="sqlfluff-templater-dbt",
+    version="0.7.0a8",
+    include_package_data=False,
+    license="MIT License",
+    description="Lint your dbt project SQL.",
+    long_description=read("README.md"),
+    # Make sure pypi is expecting markdown!
+    long_description_content_type="text/markdown",
+    author="Alan Cruickshank",
+    author_email="alan@designingoverload.com",
+    url="https://github.com/sqlfluff/sqlfluff",
+    python_requires=">=3.6",
+    keywords=[
+        "sqlfluff",
+        "sql",
+        "linter",
+        "formatter",
+        "dbt",
+    ],
+    project_urls={
+        "Homepage": "https://www.sqlfluff.com",
+        "Documentation": "https://docs.sqlfluff.com",
+        "Changes": "https://github.com/sqlfluff/sqlfluff/blob/main/CHANGELOG.md",
+        "Source": "https://github.com/sqlfluff/sqlfluff",
+        "Issue Tracker": "https://github.com/sqlfluff/sqlfluff/issues",
+        "Twitter": "https://twitter.com/SQLFluff",
+        "Chat": "https://github.com/sqlfluff/sqlfluff#sqlfluff-on-slack",
+    },
+    packages=["sqlfluff_templater_dbt"],
+    classifiers=[
+        # complete classifier list: http://pypi.python.org/pypi?%3Aaction=list_classifiers
+        "Development Status :: 4 - Beta",
+        # 'Development Status :: 5 - Production/Stable',
+        "Environment :: Console",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: Unix",
+        "Operating System :: POSIX",
+        "Operating System :: MacOS",
+        "Operating System :: Microsoft :: Windows",
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: Implementation :: CPython",
+        "Programming Language :: Python :: Implementation :: PyPy",
+        "Topic :: Utilities",
+        "Topic :: Software Development :: Quality Assurance",
+    ],
+    install_requires=["sqlfluff>=0.7.0a2", "dbt>=0.17"],
+    entry_points={"sqlfluff": ["sqlfluff_templater_dbt = sqlfluff_templater_dbt"]},
+)
+\n[end of plugins/sqlfluff-templater-dbt/setup.py]\n[start of plugins/sqlfluff-plugin-example/setup.py]\nplugins/sqlfluff-plugin-example/setup.py
+"""Setup file for example plugin."""
+from setuptools import find_packages, setup
+
+# Change these names in your plugin, e.g. company name or plugin purpose.
+PLUGIN_LOGICAL_NAME = "example"
+PLUGIN_ROOT_MODULE = "example"
+
+setup(
+    name="sqlfluff-plugin-{plugin_logical_name}".format(
+        plugin_logical_name=PLUGIN_LOGICAL_NAME
+    ),
+    include_package_data=True,
+    package_dir={"": "src"},
+    packages=find_packages(where="src"),
+    install_requires="sqlfluff>=0.4.0",
+    entry_points={
+        "sqlfluff": [
+            "{plugin_logical_name} = {plugin_root_module}.rules".format(
+                plugin_logical_name=PLUGIN_LOGICAL_NAME,
+                plugin_root_module=PLUGIN_ROOT_MODULE,
+            )
+        ]
+    },
+)
+\n[end of plugins/sqlfluff-plugin-example/setup.py]\n[start of plugins/sqlfluff-plugin-example/src/example/rules.py]\nplugins/sqlfluff-plugin-example/src/example/rules.py
+"""An example of a custom rule implemented through the plugin system."""
+
+from sqlfluff.core.plugin import hookimpl
+from sqlfluff.core.rules.base import (
+    BaseRule,
+    LintResult,
+)
+from sqlfluff.core.rules.doc_decorators import (
+    document_fix_compatible,
+    document_configuration,
+)
+from typing import List
+import os.path
+from sqlfluff.core.config import ConfigLoader
+
+
+@hookimpl
+def get_rules() -> List[BaseRule]:
+    """Get plugin rules."""
+    return [Rule_Example_L001]
+
+
+@hookimpl
+def load_default_config() -> dict:
+    """Loads the default configuration for the plugin."""
+    return ConfigLoader.get_global().load_default_config_file(
+        file_dir=os.path.dirname(__file__),
+        file_name="plugin_default_config.cfg",
+    )
+
+
+@hookimpl
+def get_configs_info() -> dict:
+    """Get rule config validations and descriptions."""
+    return {
+        "forbidden_columns": {"definition": "A list of column to forbid"},
+    }
+
+
+# These two decorators allow plugins
+# to be displayed in the sqlfluff docs
+@document_fix_compatible
+@document_configuration
+class Rule_Example_L001(BaseRule):
+    """ORDER BY on these columns is forbidden!
+
+    | **Anti-pattern**
+    | Using ORDER BY one some forbidden columns.
+
+    .. code-block:: sql
+
+        SELECT *
+        FROM foo
+        ORDER BY
+            bar,
+            baz
+
+    | **Best practice**
+    | Do not order by these columns.
+
+    .. code-block:: sql
+
+        SELECT *
+        FROM foo
+        ORDER BY bar
+    """
+
+    config_keywords = ["forbidden_columns"]
+
+    def __init__(self, *args, **kwargs):
+        """Overwrite __init__ to set config."""
+        super().__init__(*args, **kwargs)
+        self.forbidden_columns = [
+            col.strip() for col in self.forbidden_columns.split(",")
+        ]
+
+    def _eval(self, segment, raw_stack, **kwargs):
+        """We should not use ORDER BY."""
+        if segment.is_type("orderby_clause"):
+            for seg in segment.segments:
+                col_name = seg.raw.lower()
+                if (
+                    seg.is_type("column_reference")
+                    and col_name in self.forbidden_columns
+                ):
+                    return LintResult(
+                        anchor=seg,
+                        description=f"Column `{col_name}` not allowed in ORDER BY.",
+                    )
+\n[end of plugins/sqlfluff-plugin-example/src/example/rules.py]\n[start of plugins/sqlfluff-plugin-example/src/example/__init__.py]\nplugins/sqlfluff-plugin-example/src/example/__init__.py
+"""Example sqlfluff plugin."""
+\n[end of plugins/sqlfluff-plugin-example/src/example/__init__.py]\n[start of plugins/sqlfluff-plugin-example/test/rules/rule_test_cases_test.py]\nplugins/sqlfluff-plugin-example/test/rules/rule_test_cases_test.py
+"""Runs the rule test cases."""
+import os
+import pytest
+from sqlfluff.testing.rules import load_test_cases, rules__test_helper
+
+ids, test_cases = load_test_cases(
+    test_cases_path=os.path.join(
+        os.path.abspath(os.path.dirname(__file__)), "test_cases", "*.yml"
+    )
+)
+
+
+@pytest.mark.parametrize("test_case", test_cases, ids=ids)
+def test__rule_test_case(test_case):
+    """Run the tests."""
+    rules__test_helper(test_case)
+\n[end of plugins/sqlfluff-plugin-example/test/rules/rule_test_cases_test.py]\n[start of plugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/__init__.py]\nplugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/__init__.py
+"""Defines the hook endpoints for the dbt templater plugin."""
+
+from sqlfluff_templater_dbt.templater import DbtTemplater
+from sqlfluff.core.plugin import hookimpl
+
+
+@hookimpl
+def get_templaters():
+    """Get templaters."""
+    return [DbtTemplater]
+\n[end of plugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/__init__.py]\n[start of plugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/templater.py]\nplugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/templater.py
+"""Defines the templaters."""
+
+from collections import deque
+import os
+import os.path
+import logging
+from typing import List, Optional, Iterator, Tuple, Any, Dict, Deque
+
+from dataclasses import dataclass
+from cached_property import cached_property
+from functools import partial
+
+from dbt.version import get_installed_version
+from dbt.config.profile import PROFILES_DIR
+from dbt.config.runtime import RuntimeConfig as DbtRuntimeConfig
+from dbt.adapters.factory import register_adapter
+from dbt.compilation import Compiler as DbtCompiler
+from dbt.exceptions import (
+    CompilationException as DbtCompilationException,
+    FailedToConnectException as DbtFailedToConnectException,
+)
+
+from sqlfluff.core.errors import SQLTemplaterError, SQLTemplaterSkipFile
+
+from sqlfluff.core.templaters.base import TemplatedFile
+from sqlfluff.core.templaters.jinja import JinjaTemplater
+
+# Instantiate the templater logger
+templater_logger = logging.getLogger("sqlfluff.templater")
+
+
+DBT_VERSION = get_installed_version()
+DBT_VERSION_STRING = DBT_VERSION.to_version_string()
+DBT_VERSION_TUPLE = (int(DBT_VERSION.major), int(DBT_VERSION.minor))
+
+
+@dataclass
+class DbtConfigArgs:
+    """Arguments to load dbt runtime config."""
+
+    project_dir: Optional[str] = None
+    profiles_dir: Optional[str] = None
+    profile: Optional[str] = None
+
+
+class DbtTemplater(JinjaTemplater):
+    """A templater using dbt."""
+
+    name = "dbt"
+    sequential_fail_limit = 3
+
+    def __init__(self, **kwargs):
+        self.sqlfluff_config = None
+        self.formatter = None
+        self.project_dir = None
+        self.profiles_dir = None
+        self.working_dir = os.getcwd()
+        self._sequential_fails = 0
+        super().__init__(**kwargs)
+
+    def config_pairs(self):  # pragma: no cover TODO?
+        """Returns info about the given templater for output by the cli."""
+        return [("templater", self.name), ("dbt", self.dbt_version)]
+
+    @property
+    def dbt_version(self):
+        """Gets the dbt version."""
+        return DBT_VERSION_STRING
+
+    @property
+    def dbt_version_tuple(self):
+        """Gets the dbt version as a tuple on (major, minor)."""
+        return DBT_VERSION_TUPLE
+
+    @cached_property
+    def dbt_config(self):
+        """Loads the dbt config."""
+        self.dbt_config = DbtRuntimeConfig.from_args(
+            DbtConfigArgs(
+                project_dir=self.project_dir,
+                profiles_dir=self.profiles_dir,
+                profile=self._get_profile(),
+            )
+        )
+        register_adapter(self.dbt_config)
+        return self.dbt_config
+
+    @cached_property
+    def dbt_compiler(self):
+        """Loads the dbt compiler."""
+        self.dbt_compiler = DbtCompiler(self.dbt_config)
+        return self.dbt_compiler
+
+    @cached_property
+    def dbt_manifest(self):
+        """Loads the dbt manifest."""
+        # Identity function used for macro hooks
+        def identity(x):
+            return x
+
+        # Set dbt not to run tracking. We don't load
+        # a dull project and so some tracking routines
+        # may fail.
+        from dbt.tracking import do_not_track
+
+        do_not_track()
+
+        if self.dbt_version_tuple <= (0, 19):
+
+            if self.dbt_version_tuple == (0, 17):  # pragma: no cover TODO?
+                # dbt version 0.17.*
+                from dbt.parser.manifest import (
+                    load_internal_manifest as load_macro_manifest,
+                )
+            else:
+                # dbt version 0.18.* & # 0.19.*
+                from dbt.parser.manifest import load_macro_manifest
+
+                load_macro_manifest = partial(load_macro_manifest, macro_hook=identity)
+
+            from dbt.parser.manifest import load_manifest
+
+            dbt_macros_manifest = load_macro_manifest(self.dbt_config)
+            self.dbt_manifest = load_manifest(
+                self.dbt_config, dbt_macros_manifest, macro_hook=identity
+            )
+        else:
+            # dbt 0.20.* and onward
+            from dbt.parser.manifest import ManifestLoader
+
+            projects = self.dbt_config.load_dependencies()
+            loader = ManifestLoader(self.dbt_config, projects, macro_hook=identity)
+            self.dbt_manifest = loader.load()
+
+        return self.dbt_manifest
+
+    @cached_property
+    def dbt_selector_method(self):
+        """Loads the dbt selector method."""
+        if self.formatter:  # pragma: no cover TODO?
+            self.formatter.dispatch_compilation_header(
+                "dbt templater", "Compiling dbt project..."
+            )
+
+        if self.dbt_version_tuple == (0, 17):  # pragma: no cover TODO?
+            from dbt.graph.selector import PathSelector
+
+            self.dbt_selector_method = PathSelector(self.dbt_manifest)
+        else:
+            from dbt.graph.selector_methods import (
+                MethodManager as DbtSelectorMethodManager,
+                MethodName as DbtMethodName,
+            )
+
+            selector_methods_manager = DbtSelectorMethodManager(
+                self.dbt_manifest, previous_state=None
+            )
+            self.dbt_selector_method = selector_methods_manager.get_method(
+                DbtMethodName.Path, method_arguments=[]
+            )
+
+        if self.formatter:  # pragma: no cover TODO?
+            self.formatter.dispatch_compilation_header(
+                "dbt templater", "Project Compiled."
+            )
+
+        return self.dbt_selector_method
+
+    def _get_profiles_dir(self):
+        """Get the dbt profiles directory from the configuration.
+
+        The default is `~/.dbt` in 0.17 but we use the
+        PROFILES_DIR variable from the dbt library to
+        support a change of default in the future, as well
+        as to support the same overwriting mechanism as
+        dbt (currently an environment variable).
+        """
+        dbt_profiles_dir = os.path.abspath(
+            os.path.expanduser(
+                self.sqlfluff_config.get_section(
+                    (self.templater_selector, self.name, "profiles_dir")
+                )
+                or PROFILES_DIR
+            )
+        )
+
+        if not os.path.exists(dbt_profiles_dir):
+            templater_logger.error(
+                f"dbt_profiles_dir: {dbt_profiles_dir} could not be accessed. Check it exists."
+            )
+
+        return dbt_profiles_dir
+
+    def _get_project_dir(self):
+        """Get the dbt project directory from the configuration.
+
+        Defaults to the working directory.
+        """
+        dbt_project_dir = os.path.abspath(
+            os.path.expanduser(
+                self.sqlfluff_config.get_section(
+                    (self.templater_selector, self.name, "project_dir")
+                )
+                or os.getcwd()
+            )
+        )
+        if not os.path.exists(dbt_project_dir):
+            templater_logger.error(
+                f"dbt_project_dir: {dbt_project_dir} could not be accessed. Check it exists."
+            )
+
+        return dbt_project_dir
+
+    def _get_profile(self):
+        """Get a dbt profile name from the configuration."""
+        return self.sqlfluff_config.get_section(
+            (self.templater_selector, self.name, "profile")
+        )
+
+    def sequence_files(
+        self, fnames: List[str], config=None, formatter=None
+    ) -> Iterator[str]:
+        """Reorder fnames to process dependent files first.
+
+        This avoids errors when an ephemeral model is processed before use.
+        """
+        if formatter:  # pragma: no cover
+            formatter.dispatch_compilation_header("dbt templater", "Sorting Nodes...")
+
+        # Initialise config if not already done
+        self.sqlfluff_config = config
+        if not self.project_dir:
+            self.project_dir = self._get_project_dir()
+        if not self.profiles_dir:
+            self.profiles_dir = self._get_profiles_dir()
+
+        # Populate full paths for selected files
+        full_paths: Dict[str, str] = {}
+        selected_files = set()
+        for fname in fnames:
+            fpath = os.path.join(self.working_dir, fname)
+            full_paths[fpath] = fname
+            selected_files.add(fpath)
+
+        ephemeral_nodes: Dict[str, Tuple[str, Any]] = {}
+
+        # Extract the ephemeral models
+        for key, node in self.dbt_manifest.nodes.items():
+            if node.config.materialized == "ephemeral":
+                # The key is the full filepath.
+                # The value tuple, with the filepath and a list of dependent keys
+                ephemeral_nodes[key] = (
+                    os.path.join(self.project_dir, node.original_file_path),
+                    node.depends_on.nodes,
+                )
+
+        # Yield ephemeral nodes first. We use a Deque for efficient requeing.
+        # We iterate through the deque, yielding any nodes without dependents,
+        # or where those dependents have already yielded, first. The original
+        # mapping is still used to hold the metadata on each key.
+        already_yielded = set()
+        ephemeral_buffer: Deque[str] = deque(ephemeral_nodes.keys())
+        while ephemeral_buffer:
+            key = ephemeral_buffer.popleft()
+            fpath, dependents = ephemeral_nodes[key]
+
+            # If it's not in our selection, skip it
+            if fpath not in selected_files:
+                templater_logger.debug("- Purging unselected ephemeral: %r", fpath)
+            # If there are dependent nodes in the set, don't process it yet.
+            elif any(
+                dependent in ephemeral_buffer for dependent in dependents
+            ):  # pragma: no cover
+                templater_logger.debug(
+                    "- Requeuing ephemeral with dependents: %r", fpath
+                )
+                # Requeue it for later
+                ephemeral_buffer.append(key)
+            # Otherwise yield it.
+            else:
+                templater_logger.debug("- Yielding Ephemeral: %r", fpath)
+                yield full_paths[fpath]
+                already_yielded.add(full_paths[fpath])
+
+        for fname in fnames:
+            if fname not in already_yielded:
+                yield fname
+
+    def process(self, *, fname, in_str=None, config=None, formatter=None):
+        """Compile a dbt model and return the compiled SQL.
+
+        Args:
+            fname (:obj:`str`): Path to dbt model(s)
+            in_str (:obj:`str`, optional): This is ignored for dbt
+            config (:obj:`FluffConfig`, optional): A specific config to use for this
+                templating operation. Only necessary for some templaters.
+            formatter (:obj:`CallbackFormatter`): Optional object for output.
+        """
+        # Stash the formatter if provided to use in cached methods.
+        self.formatter = formatter
+        self.sqlfluff_config = config
+        self.project_dir = self._get_project_dir()
+        self.profiles_dir = self._get_profiles_dir()
+        fname_absolute_path = os.path.abspath(fname)
+
+        try:
+            os.chdir(self.project_dir)
+            processed_result = self._unsafe_process(fname_absolute_path, in_str, config)
+            # Reset the fail counter
+            self._sequential_fails = 0
+            return processed_result
+        except DbtCompilationException as e:
+            # Increment the counter
+            self._sequential_fails += 1
+            if e.node:
+                return None, [
+                    SQLTemplaterError(
+                        f"dbt compilation error on file '{e.node.original_file_path}', {e.msg}",
+                        # It's fatal if we're over the limit
+                        fatal=self._sequential_fails > self.sequential_fail_limit,
+                    )
+                ]
+            else:
+                raise  # pragma: no cover
+        except DbtFailedToConnectException as e:
+            return None, [
+                SQLTemplaterError(
+                    "dbt tried to connect to the database and failed: "
+                    "you could use 'execute' https://docs.getdbt.com/reference/dbt-jinja-functions/execute/ "
+                    f"to skip the database calls. Error: {e.msg}",
+                    fatal=True,
+                )
+            ]
+        # If a SQLFluff error is raised, just pass it through
+        except SQLTemplaterError as e:  # pragma: no cover
+            return None, [e]
+        finally:
+            os.chdir(self.working_dir)
+
+    def _find_node(self, fname, config=None):
+        if not config:  # pragma: no cover
+            raise ValueError(
+                "For the dbt templater, the `process()` method requires a config object."
+            )
+        if not fname:  # pragma: no cover
+            raise ValueError(
+                "For the dbt templater, the `process()` method requires a file name"
+            )
+        elif fname == "stdin":  # pragma: no cover
+            raise ValueError(
+                "The dbt templater does not support stdin input, provide a path instead"
+            )
+        selected = self.dbt_selector_method.search(
+            included_nodes=self.dbt_manifest.nodes,
+            # Selector needs to be a relative path
+            selector=os.path.relpath(fname, start=os.getcwd()),
+        )
+        results = [self.dbt_manifest.expect(uid) for uid in selected]
+
+        if not results:
+            model_name = os.path.splitext(os.path.basename(fname))[0]
+            disabled_model = self.dbt_manifest.find_disabled_by_name(name=model_name)
+            if disabled_model and os.path.abspath(
+                disabled_model.original_file_path
+            ) == os.path.abspath(fname):
+                raise SQLTemplaterSkipFile(
+                    f"Skipped file {fname} because the model was disabled"
+                )
+            raise RuntimeError(
+                "File %s was not found in dbt project" % fname
+            )  # pragma: no cover
+        return results[0]
+
+    def _unsafe_process(self, fname, in_str=None, config=None):
+        node = self._find_node(fname, config)
+
+        node = self.dbt_compiler.compile_node(
+            node=node,
+            manifest=self.dbt_manifest,
+        )
+
+        if hasattr(node, "injected_sql"):
+            # If injected SQL is present, it contains a better picture
+            # of what will actually hit the database (e.g. with tests).
+            # However it's not always present.
+            compiled_sql = node.injected_sql
+        else:
+            compiled_sql = node.compiled_sql
+
+        if not compiled_sql:  # pragma: no cover
+            raise SQLTemplaterError(
+                "dbt templater compilation failed silently, check your configuration "
+                "by running `dbt compile` directly."
+            )
+
+        with open(fname) as source_dbt_model:
+            source_dbt_sql = source_dbt_model.read()
+
+        n_trailing_newlines = len(source_dbt_sql) - len(source_dbt_sql.rstrip("\n"))
+
+        templater_logger.debug(
+            "    Trailing newline count in source dbt model: %r", n_trailing_newlines
+        )
+        templater_logger.debug("    Raw SQL before compile: %r", source_dbt_sql)
+        templater_logger.debug("    Node raw SQL: %r", node.raw_sql)
+        templater_logger.debug("    Node compiled SQL: %r", compiled_sql)
+
+        # When using dbt-templater, trailing newlines are ALWAYS REMOVED during
+        # compiling. Unless fixed (like below), this will cause:
+        #    1. L009 linting errors when running "sqlfluff lint foo_bar.sql"
+        #       since the linter will use the compiled code with the newlines
+        #       removed.
+        #    2. "No newline at end of file" warnings in Git/GitHub since
+        #       sqlfluff uses the compiled SQL to write fixes back to the
+        #       source SQL in the dbt model.
+        # The solution is:
+        #    1. Check for trailing newlines before compiling by looking at the
+        #       raw SQL in the source dbt file, store the count of trailing newlines.
+        #    2. Append the count from #1 above to the node.raw_sql and
+        #       compiled_sql objects, both of which have had the trailing
+        #       newlines removed by the dbt-templater.
+        node.raw_sql = node.raw_sql + "\n" * n_trailing_newlines
+        compiled_sql = compiled_sql + "\n" * n_trailing_newlines
+
+        raw_sliced, sliced_file, templated_sql = self.slice_file(
+            node.raw_sql,
+            compiled_sql,
+            config=config,
+        )
+
+        return (
+            TemplatedFile(
+                source_str=node.raw_sql,
+                templated_str=templated_sql,
+                fname=fname,
+                sliced_file=sliced_file,
+                raw_sliced=raw_sliced,
+            ),
+            # No violations returned in this way.
+            [],
+        )
+
+    @classmethod
+    def _preprocess_template(cls, in_str: str) -> str:
+        return in_str
+\n[end of plugins/sqlfluff-templater-dbt/sqlfluff_templater_dbt/templater.py]\n[start of src/sqlfluff/__main__.py]\nsrc/sqlfluff/__main__.py
+"""Export cli to __main__ for use like python -m sqlfluff."""
+from sqlfluff.cli.commands import cli
+
+if __name__ == "__main__":
+    cli()
+\n[end of src/sqlfluff/__main__.py]\n[start of src/sqlfluff/diff_quality_plugin.py]\nsrc/sqlfluff/diff_quality_plugin.py
+"""This module integrates SQLFluff with diff_cover's "diff-quality" tool."""
+from typing import List
+
+from diff_cover.hook import hookimpl as diff_cover_hookimpl
+from diff_cover.violationsreporters.base import BaseViolationReporter, Violation
+
+from sqlfluff.core import FluffConfig, Linter
+
+
+class SQLFluffViolationReporter(BaseViolationReporter):
+    """Class that implements diff-quality integration."""
+
+    supported_extensions = ["sql"]
+
+    def __init__(self):
+        """Calls the base class constructor to set the object's name."""
+        super().__init__("sqlfluff")
+
+    @staticmethod
+    def violations(src_path: str) -> List[Violation]:
+        """Return list of violations.
+
+        Given the path to a .sql file, analyze it and return a list of
+        violations (i.e. formatting or style issues).
+        """
+        linter = Linter(config=FluffConfig.from_root())
+        linted_path = linter.lint_path(src_path, ignore_non_existent_files=True)
+        result = []
+        for violation in linted_path.get_violations():
+            try:
+                # Normal SQLFluff warnings
+                message = f"{violation.rule_code()}: {violation.description}"
+            except AttributeError:
+                # Parse errors
+                message = str(violation)
+            result.append(Violation(violation.line_no, message))
+        return result
+
+    def measured_lines(self, src_path: str) -> None:  # pragma: no cover
+        """Return list of the lines in src_path that were measured."""
+
+
+@diff_cover_hookimpl
+def diff_cover_report_quality() -> SQLFluffViolationReporter:
+    """Returns the SQLFluff plugin.
+
+    This function is registered as a diff_cover entry point. diff-quality calls
+    it in order to "discover" the SQLFluff plugin.
+
+    :return: Object that implements the BaseViolationReporter ABC
+    """
+    return SQLFluffViolationReporter()
+\n[end of src/sqlfluff/diff_quality_plugin.py]\n[start of src/sqlfluff/__init__.py]\nsrc/sqlfluff/__init__.py
+"""Sqlfluff is a SQL linter for humans."""
+import sys
+import pytest
+
+# Expose the public API.
+from sqlfluff.api import lint, fix, parse, list_rules, list_dialects  # noqa: F401
+
+# Set the version attribute of the library
+import pkg_resources
+import configparser
+
+# Get the current version
+config = configparser.ConfigParser()
+config.read([pkg_resources.resource_filename("sqlfluff", "config.ini")])
+
+__version__ = config.get("sqlfluff", "version")
+
+# Check major python version
+if sys.version_info[0] < 3:
+    raise Exception("Sqlfluff does not support Python 2. Please upgrade to Python 3.")
+# Check minor python version
+elif sys.version_info[1] < 6:
+    raise Exception(
+        "Sqlfluff %s only supports Python 3.6 and beyond. "
+        "Use an earlier version of sqlfluff or a later version of Python" % __version__
+    )
+
+# Register helper functions to support variable introspection on failure.
+pytest.register_assert_rewrite("sqlfluff.testing")
+\n[end of src/sqlfluff/__init__.py]\n[start of src/sqlfluff/api/info.py]\nsrc/sqlfluff/api/info.py
+"""Information API."""
+
+from typing import List
+
+from sqlfluff.core import dialect_readout, Linter
+from sqlfluff.core.linter import RuleTuple
+from sqlfluff.core.dialects import DialectTuple
+
+
+def list_rules() -> List[RuleTuple]:
+    """Return a list of available rule tuples."""
+    linter = Linter()
+    return linter.rule_tuples()
+
+
+def list_dialects() -> List[DialectTuple]:
+    """Return a list of available dialect info."""
+    return list(dialect_readout())
+\n[end of src/sqlfluff/api/info.py]\n[start of src/sqlfluff/api/simple.py]\nsrc/sqlfluff/api/simple.py
+"""The simple public API methods."""
+
+from sqlfluff.core import Linter
+
+
+class APIParsingError(ValueError):
+    """An exception which holds a set of violations."""
+
+    def __init__(self, violations, **kwargs):
+        self.violations = violations
+        self.msg = f"Found {len(violations)} issues while parsing string."
+        for viol in violations:
+            self.msg += f"\n{viol!s}"
+        super().__init__(self.msg, **kwargs)
+
+
+def _unify_str_or_file(sql):
+    """Unify string and files in the same format."""
+    if not isinstance(sql, str):
+        try:
+            sql = sql.read()
+        except AttributeError:  # pragma: no cover
+            raise TypeError("Value passed as sql is not a string or a readable object.")
+    return sql
+
+
+def lint(sql, dialect="ansi", rules=None):
+    """Lint a sql string or file.
+
+    Args:
+        sql (:obj:`str` or file-like object): The sql to be linted
+            either as a string or a subclass of :obj:`TextIOBase`.
+        dialect (:obj:`str`, optional): A reference to the dialect of the sql
+            to be linted. Defaults to `ansi`.
+        rules (:obj:`str` or iterable of :obj:`str`, optional): A subset of rule
+            reference to lint for.
+
+    Returns:
+        :obj:`list` of :obj:`dict` for each violation found.
+    """
+    sql = _unify_str_or_file(sql)
+    linter = Linter(dialect=dialect, rules=rules)
+
+    result = linter.lint_string_wrapped(sql)
+    result_records = result.as_records()
+    # Return just the violations for this file
+    return [] if not result_records else result_records[0]["violations"]
+
+
+def fix(sql, dialect="ansi", rules=None):
+    """Fix a sql string or file.
+
+    Args:
+        sql (:obj:`str` or file-like object): The sql to be linted
+            either as a string or a subclass of :obj:`TextIOBase`.
+        dialect (:obj:`str`, optional): A reference to the dialect of the sql
+            to be linted. Defaults to `ansi`.
+        rules (:obj:`str` or iterable of :obj:`str`, optional): A subset of rule
+            reference to lint for.
+
+    Returns:
+        :obj:`str` for the fixed sql if possible.
+    """
+    sql = _unify_str_or_file(sql)
+    linter = Linter(dialect=dialect, rules=rules)
+
+    result = linter.lint_string_wrapped(sql, fix=True)
+    fixed_string = result.paths[0].files[0].fix_string()[0]
+    return fixed_string
+
+
+def parse(sql, dialect="ansi"):
+    """Parse a sql string or file.
+
+    Args:
+        sql (:obj:`str` or file-like object): The sql to be linted
+            either as a string or a subclass of :obj:`TextIOBase`.
+        dialect (:obj:`str`, optional): A reference to the dialect of the sql
+            to be linted. Defaults to `ansi`.
+
+    Returns:
+        :obj:`ParsedString` containing the parsed structure.
+    """
+    sql = _unify_str_or_file(sql)
+    linter = Linter(dialect=dialect)
+    parsed = linter.parse_string(sql)
+    # If we encounter any parsing errors, raise them in a combined issue.
+    if parsed.violations:
+        raise APIParsingError(parsed.violations)
+    return parsed
+\n[end of src/sqlfluff/api/simple.py]\n[start of src/sqlfluff/api/__init__.py]\nsrc/sqlfluff/api/__init__.py
+"""Elements which wrap the sqlfluff core library for public use."""
+
+# flake8: noqa: F401
+
+# Expose the simple api
+from sqlfluff.api.simple import lint, fix, parse, APIParsingError
+from sqlfluff.api.info import list_rules, list_dialects
+\n[end of src/sqlfluff/api/__init__.py]\n[start of src/sqlfluff/dialects/dialect_ansi_keywords.py]\nsrc/sqlfluff/dialects/dialect_ansi_keywords.py
+"""A list of all SQL key words."""
+
+ansi_reserved_keywords = """SELECT
+JOIN
+ON
+USING
+CROSS
+INNER
+LEFT
+RIGHT
+OUTER
+INTERVAL
+CASE
+FULL
+NULL
+UNION
+IGNORE
+RESPECT
+PARTITION
+ORDER
+ROWS
+SET
+"""
+
+ansi_unreserved_keywords = """ABORT
+ABS
+ABSOLUTE
+ACCESS
+ACCOUNT
+ACCOUNTS
+ACTION
+ADA
+ADD
+ADMIN
+AFTER
+AGGREGATE
+ALIAS
+ALL
+ALLOCATE
+ALSO
+ALTER
+ALWAYS
+ANALYSE
+ANALYZE
+ANY
+APPLY
+ARE
+ARRAY
+AS
+ASC
+ASENSITIVE
+ASSERTION
+ASSIGNMENT
+ASYMMETRIC
+AT
+ATOMIC
+ATTRIBUTE
+ATTRIBUTES
+AUDIT
+AUTHORIZATION
+AUTO_INCREMENT
+AVG
+AVG_ROW_LENGTH
+BACKUP
+BACKWARD
+BEFORE
+BEGIN
+BERNOULLI
+BETWEEN
+BIGINT
+BINARY
+BINDING
+BIT
+BIT_LENGTH
+BITVAR
+BLOB
+BOOL
+BOOLEAN
+BOTH
+BREADTH
+BREAK
+BROWSE
+BULK
+BY
+CACHE
+CALL
+CALLED
+CARDINALITY
+CASCADE
+CASCADED
+CAST
+CATALOG
+CATALOG_NAME
+CEIL
+CEILING
+CHAIN
+CHANGE
+CHAR
+CHARACTER
+CHARACTERISTICS
+CHARACTER_LENGTH
+CHARACTERS
+CHARACTER_SET_CATALOG
+CHARACTER_SET_NAME
+CHARACTER_SET_SCHEMA
+CHAR_LENGTH
+CHECK
+CHECKED
+CHECKPOINT
+CHECKSUM
+CLASS
+CLASS_ORIGIN
+CLOB
+CLOSE
+CLUSTER
+CLUSTERED
+COALESCE
+COBOL
+COLLATE
+COLLATION
+COLLATION_CATALOG
+COLLATION_NAME
+COLLATION_SCHEMA
+COLLECT
+COLUMN
+COLUMN_NAME
+COLUMNS
+COMMAND_FUNCTION
+COMMAND_FUNCTION_CODE
+COMMENT
+COMMIT
+COMMITTED
+COMPLETION
+COMPRESS
+COMPUTE
+CONCURRENTLY
+CONDITION
+CONDITION_NUMBER
+CONNECT
+CONNECTION
+CONNECTION_NAME
+CONSTRAINT
+CONSTRAINT_CATALOG
+CONSTRAINT_NAME
+CONSTRAINTS
+CONSTRAINT_SCHEMA
+CONSTRUCTOR
+CONTAINS
+CONTAINSTABLE
+CONTINUE
+CONVERSION
+CONVERT
+COPY
+CORR
+CORRESPONDING
+COUNT
+COVAR_POP
+COVAR_SAMP
+CREATE
+CREATEDB
+CREATEROLE
+CREATEUSER
+CSV
+CUBE
+CUME_DIST
+CURRENT
+CURRENT_DATE
+CURRENT_DEFAULT_TRANSFORM_GROUP
+CURRENT_PATH
+CURRENT_ROLE
+CURRENT_TIME
+CURRENT_TIMESTAMP
+CURRENT_TRANSFORM_GROUP_FOR_TYPE
+CURRENT_USER
+CURSOR
+CURSOR_NAME
+CYCLE
+DATA
+DATABASE
+DATABASES
+DATE
+DATEADD
+DATETIME
+DATETIME_INTERVAL_CODE
+DATETIME_INTERVAL_PRECISION
+DAY
+DAY_HOUR
+DAY_MICROSECOND
+DAY_MINUTE
+DAYOFMONTH
+DAYOFWEEK
+DAYOFYEAR
+DAY_SECOND
+DBCC
+DEALLOCATE
+DEC
+DECIMAL
+DECLARE
+DEFAULT
+DEFAULTS
+DEFERRABLE
+DEFERRED
+DEFINED
+DEFINER
+DEGREE
+DELAYED
+DELAY_KEY_WRITE
+DELETE
+DELIMITER
+DELIMITERS
+DENSE_RANK
+DENY
+DEPTH
+DEREF
+DERIVED
+DESC
+DESCRIBE
+DESCRIPTOR
+DESTROY
+DESTRUCTOR
+DETERMINISTIC
+DIAGNOSTICS
+DICTIONARY
+DISABLE
+DISCONNECT
+DISK
+DISPATCH
+DISTINCT
+DISTINCTROW
+DISTRIBUTED
+DIV
+DO
+DOMAIN
+DOUBLE
+DROP
+DUMMY
+DUMP
+DYNAMIC
+DYNAMIC_FUNCTION
+DYNAMIC_FUNCTION_CODE
+EACH
+ELEMENT
+ELSE
+ELSEIF
+ENABLE
+ENCLOSED
+ENCODING
+ENCRYPTED
+END
+END-EXEC
+ENUM
+EQUALS
+ERRLVL
+ESCAPE
+ESCAPED
+EVERY
+EXCEPT
+EXCEPTION
+EXCLUDE
+EXCLUDING
+EXCLUSIVE
+EXEC
+EXECUTE
+EXISTING
+EXISTS
+EXIT
+EXP
+EXPLAIN
+EXTENSION
+EXTERNAL
+EXTRACT
+FALSE
+FETCH
+FIELDS
+FILE
+FILLFACTOR
+FILTER
+FINAL
+FIRST
+FLOAT
+FLOAT4
+FLOAT8
+FLOOR
+FLUSH
+FOLLOWING
+FOR
+FORCE
+FOREIGN
+FORTRAN
+FORWARD
+FOUND
+FREE
+FREETEXT
+FREETEXTTABLE
+FREEZE
+FROM
+FULLTEXT
+FUNCTION
+FUNCTIONS
+FUSION
+FUTURE
+G
+GENERAL
+GENERATED
+GET
+GLOBAL
+GO
+GOTO
+GRANT
+GRANTED
+GRANTS
+GREATEST
+GROUP
+GROUPING
+HANDLER
+HAVING
+HEADER
+HEAP
+HIERARCHY
+HIGH_PRIORITY
+HOLD
+HOLDLOCK
+HOST
+HOSTS
+HOUR
+HOUR_MICROSECOND
+HOUR_MINUTE
+HOUR_SECOND
+IDENTIFIED
+IDENTITY
+IDENTITYCOL
+IDENTITY_INSERT
+IF
+ILIKE
+IMMEDIATE
+IMMUTABLE
+IMPLEMENTATION
+IMPLICIT
+IMPORTED
+IN
+INCLUDE
+INCLUDING
+INCREMENT
+INDEX
+INDICATOR
+INFILE
+INFIX
+INHERIT
+INHERITS
+INITIAL
+INITIALIZE
+INITIALLY
+INOUT
+INPUT
+INSENSITIVE
+INSERT
+INSERT_ID
+INSTANCE
+INSTANTIABLE
+INSTEAD
+INT
+INT1
+INT2
+INT3
+INT4
+INT8
+INTEGER
+INTEGRATION
+INTEGRATIONS
+INTERSECT
+INTERSECTION
+INTO
+INVOKER
+IS
+ISAM
+ISNULL
+ISOLATION
+ITERATE
+JSON
+K
+KEY
+KEY_MEMBER
+KEYS
+KEY_TYPE
+KILL
+LANCOMPILER
+LANGUAGE
+LARGE
+LAST
+LAST_INSERT_ID
+LATERAL
+LEADING
+LEAST
+LEAVE
+LENGTH
+LESS
+LEVEL
+LIKE
+LIMIT
+LINENO
+LINES
+LISTEN
+LN
+LOAD
+LOCAL
+LOCALTIME
+LOCALTIMESTAMP
+LOCATION
+LOCATOR
+LOCK
+LOCKS
+LOGIN
+LOGS
+LONG
+LONGBLOB
+LONGTEXT
+LOOP
+LOWER
+LOW_PRIORITY
+M
+MANAGE
+MAP
+MATCH
+MATCHED
+MATERIALIZED
+MAX
+MAXEXTENTS
+MAX_ROWS
+MAXVALUE
+MEDIUMBLOB
+MEDIUMINT
+MEDIUMTEXT
+MEMBER
+MERGE
+MESSAGE_LENGTH
+MESSAGE_OCTET_LENGTH
+MESSAGE_TEXT
+METHOD
+MIDDLEINT
+MIN
+MIN_ROWS
+MINUS
+MINUTE
+MINUTE_MICROSECOND
+MINUTE_SECOND
+MINVALUE
+ML
+MLSLABEL
+MOD
+MODE
+MODEL
+MODIFIES
+MODIFY
+MODULE
+MONITOR
+MONTH
+MONTHNAME
+MORE
+MOVE
+MULTISET
+MUMPS
+MYISAM
+NAME
+NAMES
+NAN
+NATIONAL
+NATURAL
+NCHAR
+NCLOB
+NESTING
+NEW
+NEXT
+NO
+NOAUDIT
+NOCACHE
+NOCHECK
+NOCOMPRESS
+NOCREATEDB
+NOCREATEROLE
+NOCREATEUSER
+NOCYCLE
+NOINHERIT
+NOLOGIN
+NONCLUSTERED
+NONE
+NOORDER
+NORMALIZE
+NORMALIZED
+NOSUPERUSER
+NOT
+NOTHING
+NOTIFY
+NOTNULL
+NOWAIT
+NO_WRITE_TO_BINLOG
+NULLABLE
+NULLIF
+NULLS
+NUMBER
+NUMERIC
+OBJECT
+OBJECTS
+OCTET_LENGTH
+OCTETS
+OF
+OFF
+OFFLINE
+OFFSET
+OFFSETS
+OIDS
+OLD
+ONLINE
+ONLY
+OPEN
+OPENDATASOURCE
+OPENQUERY
+OPENROWSET
+OPENXML
+OPERATE
+OPERATION
+OPERATOR
+OPTIMIZE
+OPTION
+OPTIONALLY
+OPTIONS
+ORDERING
+ORDINALITY
+OTHERS
+OUT
+OUTFILE
+OUTPUT
+OVER
+OVERLAPS
+OVERLAY
+OVERRIDING
+OVERWRITE
+OWNER
+OWNERSHIP
+PACK_KEYS
+PAD
+PARAMETER
+PARAMETER_MODE
+PARAMETER_NAME
+PARAMETER_ORDINAL_POSITION
+PARAMETERS
+PARAMETER_SPECIFIC_CATALOG
+PARAMETER_SPECIFIC_NAME
+PARAMETER_SPECIFIC_SCHEMA
+PARTIAL
+PASCAL
+PASSWORD
+PATH
+PCTFREE
+PERCENT
+PERCENTILE_CONT
+PERCENTILE_DISC
+PERCENT_RANK
+PLACING
+PLAN
+PLI
+POSITION
+POSTFIX
+POWER
+PRECEDING
+PRECISION
+PREFIX
+PREORDER
+PREPARE
+PREPARED
+PRESERVE
+PRIMARY
+PRINT
+PRIOR
+PRIVILEGES
+PROC
+PROCEDURAL
+PROCEDURE
+PROCEDURES
+PROCESS
+PROCESSLIST
+PUBLIC
+PURGE
+QUALIFY
+QUARTER
+QUOTE
+RAID0
+RAISERROR
+RANGE
+RANK
+RAW
+READ
+READS
+READTEXT
+REAL
+RECHECK
+RECONFIGURE
+RECURSIVE
+REF
+REFERENCE_USAGE
+REFERENCES
+REFERENCING
+REGEXP
+REGR_AVGX
+REGR_AVGY
+REGR_COUNT
+REGR_INTERCEPT
+REGR_R2
+REGR_SLOPE
+REGR_SXX
+REGR_SXY
+REGR_SYY
+REINDEX
+RELATIVE
+RELEASE
+RELOAD
+RENAME
+REPEAT
+REPEATABLE
+REPLACE
+REPLICATION
+REQUIRE
+RESET
+RESIGNAL
+RESOURCE
+RESTART
+RESTORE
+RESTRICT
+RESULT
+RETURN
+RETURNED_CARDINALITY
+RETURNED_LENGTH
+RETURNED_OCTET_LENGTH
+RETURNED_SQLSTATE
+RETURNS
+REVOKE
+RLIKE
+ROLE
+ROLES
+ROLLBACK
+ROLLUP
+ROUTINE
+ROUTINE_CATALOG
+ROUTINE_NAME
+ROUTINE_SCHEMA
+ROUTINES
+ROW
+ROWCOUNT
+ROW_COUNT
+ROWGUIDCOL
+ROWID
+ROWNUM
+ROW_NUMBER
+RULE
+SAVE
+SAVEPOINT
+SCALE
+SCHEMA
+SCHEMA_NAME
+SCHEMAS
+SCOPE
+SCOPE_CATALOG
+SCOPE_NAME
+SCOPE_SCHEMA
+SCROLL
+SEARCH
+SECOND
+SECOND_MICROSECOND
+SECTION
+SECURITY
+SELF
+SENSITIVE
+SEPARATOR
+SEQUENCE
+SEQUENCES
+SERIALIZABLE
+SERVER_NAME
+SESSION
+SESSION_USER
+SETOF
+SETS
+SETUSER
+SHARE
+SHARES
+SHOW
+SHUTDOWN
+SIGNAL
+SIMILAR
+SIMPLE
+SIZE
+SMALLINT
+SOME
+SONAME
+SOURCE
+SPACE
+SPATIAL
+SPECIFIC
+SPECIFIC_NAME
+SPECIFICTYPE
+SQL
+SQL_BIG_RESULT
+SQL_BIG_SELECTS
+SQL_BIG_TABLES
+SQLCA
+SQL_CALC_FOUND_ROWS
+SQLCODE
+SQLERROR
+SQLEXCEPTION
+SQL_LOG_OFF
+SQL_LOG_UPDATE
+SQL_LOW_PRIORITY_UPDATES
+SQL_SELECT_LIMIT
+SQL_SMALL_RESULT
+SQLSTATE
+SQLWARNING
+SQL_WARNINGS
+SQRT
+SSL
+STABLE
+STAGE
+STAGES
+START
+STARTING
+STARTS
+STATE
+STATEMENT
+STATIC
+STATISTICS
+STDDEV_POP
+STDDEV_SAMP
+STDIN
+STDOUT
+STORAGE
+STRAIGHT_JOIN
+STREAM
+STREAMS
+STRICT
+STRING
+STRUCTURE
+STYLE
+SUBCLASS_ORIGIN
+SUBLIST
+SUBMULTISET
+SUBSTRING
+SUCCESSFUL
+SUM
+SUPERUSER
+SYMMETRIC
+SYNONYM
+SYSDATE
+SYSID
+SYSTEM
+SYSTEM_USER
+TABLE
+TABLE_NAME
+TABLES
+TABLESAMPLE
+TABLESPACE
+TASK
+TASKS
+TEMP
+TEMPLATE
+TEMPORARY
+TERMINATE
+TERMINATED
+TEXT
+TEXTSIZE
+THAN
+THEN
+TIES
+TIME
+TIMESTAMP
+TIMEZONE_HOUR
+TIMEZONE_MINUTE
+TINYBLOB
+TINYINT
+TINYTEXT
+TO
+TOAST
+TOP
+TOP_LEVEL_COUNT
+TRAILING
+TRAN
+TRANSACTION
+TRANSACTION_ACTIVE
+TRANSACTIONS
+TRANSACTIONS_COMMITTED
+TRANSACTIONS_ROLLED_BACK
+TRANSFORM
+TRANSFORMS
+TRANSIENT
+TRANSLATE
+TRANSLATION
+TREAT
+TRIGGER
+TRIGGER_CATALOG
+TRIGGER_NAME
+TRIGGER_SCHEMA
+TRIM
+TRUE
+TRUNCATE
+TRUSTED
+TSEQUAL
+TYPE
+UESCAPE
+UID
+UNBOUNDED
+UNCOMMITTED
+UNDER
+UNDO
+UNENCRYPTED
+UNIQUE
+UNKNOWN
+UNLISTEN
+UNLOCK
+UNNAMED
+UNNEST
+UNSIGNED
+UNTIL
+UPDATE
+UPDATETEXT
+UPPER
+USAGE
+USE
+USE_ANY_ROLE
+USER
+USER_DEFINED_TYPE_CATALOG
+USER_DEFINED_TYPE_CODE
+USER_DEFINED_TYPE_NAME
+USER_DEFINED_TYPE_SCHEMA
+USERS
+UTC_DATE
+UTC_TIME
+UTC_TIMESTAMP
+VACUUM
+VALID
+VALIDATE
+VALIDATOR
+VALUE
+VALUES
+VARBINARY
+VARCHAR
+VARCHAR2
+VARCHARACTER
+VARIABLE
+VARIABLES
+VAR_POP
+VAR_SAMP
+VARYING
+VERBOSE
+VERSION
+VIEW
+VIEWS
+VOLATILE
+WAITFOR
+WAREHOUSE
+WAREHOUSES
+WEEK
+WEEKDAY
+WHEN
+WHENEVER
+WHERE
+WHILE
+WIDTH_BUCKET
+WINDOW
+WITH
+WITHIN
+WITHOUT
+WORK
+WRITE
+WRITETEXT
+X509
+XML
+XOR
+YAML
+YEAR
+YEAR_MONTH
+ZEROFILL
+ZONE"""
+\n[end of src/sqlfluff/dialects/dialect_ansi_keywords.py]\n[start of src/sqlfluff/dialects/dialect_teradata.py]\nsrc/sqlfluff/dialects/dialect_teradata.py
+"""The Teradata dialect.
+
+This inherits from the ansi dialect, with changes as specified by
+Teradata Database SQL Data Definition Language Syntax and Examples
+
+    Release Number 15.10
+    Release Date December 2015
+
+"""
+
+from sqlfluff.core.parser import (
+    BaseSegment,
+    Sequence,
+    StartsWith,
+    OneOf,
+    Delimited,
+    Bracketed,
+    AnyNumberOf,
+    Ref,
+    Anything,
+    RegexLexer,
+    CodeSegment,
+    Indent,
+    Dedent,
+    OptionallyBracketed,
+)
+
+from sqlfluff.core.dialects import load_raw_dialect
+
+ansi_dialect = load_raw_dialect("ansi")
+teradata_dialect = ansi_dialect.copy_as("teradata")
+
+teradata_dialect.patch_lexer_matchers(
+    [
+        # so it also matches 1.
+        RegexLexer("numeric_literal", r"([0-9]+(\.[0-9]*)?)", CodeSegment),
+    ]
+)
+
+# Remove unused keywords from the dialect.
+teradata_dialect.sets("unreserved_keywords").difference_update(
+    [
+        # 'auto_increment',
+        # The following are moved to being reserved keywords
+        "UNION",
+        "TIMESTAMP",
+        "DATE",
+    ]
+)
+
+teradata_dialect.sets("unreserved_keywords").update(
+    [
+        "AUTOINCREMENT",
+        "ACTIVITYCOUNT",
+        "CASESPECIFIC",
+        "CS",
+        "DAYS",
+        "DUAL",
+        "ERRORCODE",
+        "EXPORT",
+        "FALLBACK",
+        "FORMAT",
+        "HASH",
+        "IMPORT",
+        "JOURNAL",
+        "LABEL",
+        "LOGON",
+        "LOGOFF",
+        "MACRO",
+        "MAXINTERVALS",
+        "MAXVALUELENGTH",
+        "MEETS",
+        "MERGEBLOCKRATIO",
+        "PERCENT",
+        "PROFILE",
+        "PROTECTION",
+        "QUIT",
+        "RUN",
+        "SAMPLE",
+        "STAT",
+        "SUMMARY",
+        "THRESHOLD",
+        "UC",
+        "UPPERCASE",
+    ]
+)
+
+teradata_dialect.sets("reserved_keywords").update(["UNION", "TIMESTAMP", "DATE"])
+
+
+# BTEQ statement
+@teradata_dialect.segment()
+class BteqKeyWordSegment(BaseSegment):
+    """Bteq Keywords.
+
+    Often a string with a dot, sometimes followed by a Literal
+
+    LOGON - Used to log into Teradata system.
+    ACTIVITYCOUNT - Returns the number of rows affected by the previous query.
+    ERRORCODE - Returns the status code of the previous query.
+    DATABASE - Sets the default database.
+    LABEL - Assigns a label to a set of SQL commands.
+    RUN FILE - Executes the query contained in a file.
+    GOTO - Transfers control to a label.
+    LOGOFF - Logs off from database and terminates all sessions.
+    IMPORT - Specifies the input file path.
+    EXPORT - Specifies the output file path and initiates the export.
+    """
+
+    type = "bteq_key_word_segment"
+    match_grammar = Sequence(
+        Ref("DotSegment", optional=True),
+        OneOf(
+            "IF",
+            "THEN",
+            "LOGON",
+            "ACTIVITYCOUNT",
+            "ERRORCODE",
+            "DATABASE",
+            "LABEL",
+            "GOTO",
+            "LOGOFF",
+            "IMPORT",
+            "EXPORT",
+            "RUN",
+            "QUIT",
+            "ACTIVITYCOUNT",
+        ),
+        Ref("LiteralGrammar", optional=True),
+    )
+
+
+@teradata_dialect.segment()
+class BteqStatementSegment(BaseSegment):
+    """Bteq statements start with a dot, followed by a Keyword.
+
+    Non exhaustive and maybe catching too many statements?
+
+    # BTEQ commands
+    .if errorcode > 0 then .quit 2
+    .IF ACTIVITYCOUNT = 0 THEN .QUIT
+    """
+
+    type = "bteq_statement"
+    match_grammar = StartsWith(Ref("DotSegment"))
+    parse_grammar = Sequence(
+        Ref("DotSegment"),
+        Ref("BteqKeyWordSegment"),
+        AnyNumberOf(
+            Ref("BteqKeyWordSegment"),
+            # if ... then: the ...
+            Sequence(
+                Ref("ComparisonOperatorGrammar"), Ref("LiteralGrammar"), optional=True
+            ),
+            optional=True,
+        ),
+    )
+
+
+@teradata_dialect.segment()
+class TdCollectStatUsingOptionClauseSegment(BaseSegment):
+    """'using_option' for COLLECT STAT clause."""
+
+    type = "collect_stat_using_option_clause"
+
+    match_grammar = Sequence(
+        OneOf(
+            Sequence("SAMPLE", Ref("NumericLiteralSegment"), "PERCENT"),
+            Sequence("SYSTEM", "THRESHOLD", OneOf("PERCENT", "DAYS", optional=True)),
+            Sequence("SYSTEM", "SAMPLE"),
+            Sequence(
+                "THRESHOLD",
+                Ref("NumericLiteralSegment"),
+                OneOf("PERCENT", "DAYS"),
+            ),
+            Sequence("NO", "THRESHOLD", OneOf("PERCENT", "DAYS", optional=True)),
+            Sequence("NO", "SAMPLE"),
+            Sequence("MAXINTERVALS", Ref("NumericLiteralSegment")),
+            Sequence("SYSTEM", "MAXINTERVALS"),
+            Sequence("MAXVALUELENGTH", Ref("NumericLiteralSegment")),
+            Sequence("SYSTEM", "MAXVALUELENGTH"),
+            "SAMPLE",
+        ),
+        Sequence("FOR", "CURRENT", optional=True),
+    )
+
+
+@teradata_dialect.segment()
+class TdOrderByStatClauseSegment(BaseSegment):
+    """An `ORDER BY (VALUES|HASH) (column_name)` clause in COLLECT STATS."""
+
+    type = "stat_orderby_clause"
+    match_grammar = Sequence(
+        "ORDER", "BY", OneOf("VALUES", "HASH"), Bracketed(Ref("ColumnReferenceSegment"))
+    )
+
+
+# Collect Statistics statement
+@teradata_dialect.segment()
+class TdCollectStatisticsStatementSegment(BaseSegment):
+    """A `COLLECT STATISTICS (Optimizer Form)` statement.
+
+    # TODO: add expression
+    COLLECT [SUMMARY] (STATISTICS|STAT) [[COLUMN| [UNIQUE] INDEX] (expression (, expression ...)] ON TABLENAME
+    """
+
+    type = "collect_statistics_statement"
+    match_grammar = Sequence(
+        "COLLECT",
+        Ref.keyword("SUMMARY", optional=True),
+        OneOf("STATISTICS", "STAT"),
+        Sequence(
+            "USING",
+            Delimited(
+                Ref("TdCollectStatUsingOptionClauseSegment"),
+                delimiter="AND",
+            ),
+            optional=True,
+        ),
+        Delimited(
+            OneOf(
+                # UNIQUE INDEX index_name ALL (column_name, ...) ORDER BY VALUES|HASH (column_name)
+                Sequence(
+                    Ref.keyword("UNIQUE", optional=True),
+                    "INDEX",
+                    Ref("IndexReferenceSegment", optional=True),
+                    Ref.keyword("ALL", optional=True),
+                    Bracketed(
+                        Delimited(
+                            Ref("ColumnReferenceSegment"), delimiter=Ref("CommaSegment")
+                        )
+                    ),
+                    Ref("TdOrderByStatClauseSegment", optional=True),
+                ),
+                # UNIQUE INDEX index_name
+                Sequence(
+                    Ref.keyword("UNIQUE", optional=True),
+                    "INDEX",
+                    Ref("IndexReferenceSegment"),
+                ),
+                # COLUMN ...
+                Sequence(
+                    "COLUMN",
+                    Bracketed(
+                        Delimited(
+                            OneOf(
+                                Ref("ColumnReferenceSegment"),
+                                Ref.keyword("PARTITION"),
+                                # TODO: expression
+                            ),
+                            delimiter=Ref("CommaSegment"),
+                        ),
+                    ),
+                    Sequence(
+                        Ref.keyword("AS", optional=True),
+                        Ref("ObjectReferenceSegment"),  # statistics_name
+                        optional=True,
+                    ),
+                ),
+            ),
+            delimiter=Ref("CommaSegment"),
+            optional=True,
+        ),
+        "ON",
+        Ref.keyword("TEMPORARY", optional=True),
+        Ref("TableReferenceSegment"),
+    )
+
+
+@teradata_dialect.segment()
+class TdCommentStatementSegment(BaseSegment):
+    """A `COMMENT` statement.
+
+    COMMENT [ON] (object_kind_1|object_kind_2) name [[AS|IS] comment]
+    object_kind_1: (COLUMN|FUNCTION|GLOP SET|MACRO|MAP|METHOD|PROCEDURE|PROFILE|ROLE|TRIGGER|TYPE|VIEW)
+    object_kind_2: (DATABASE|FILE|TABLE|USER)
+    """
+
+    type = "comment_clause"
+    is_ddl = True
+    is_dml = False
+    is_dql = False
+    is_dcl = False
+
+    match_grammar = Sequence(
+        "COMMENT",
+        OneOf("ON", optional=True),
+        OneOf(
+            Sequence("COLUMN", Ref("ColumnReferenceSegment")),
+            Sequence("FUNCTION", Ref("ObjectReferenceSegment")),
+            Sequence("MACRO", Ref("ObjectReferenceSegment")),
+            Sequence("MAP", Ref("ObjectReferenceSegment")),
+            Sequence("METHOD", Ref("ObjectReferenceSegment")),
+            Sequence("PROCEDURE", Ref("ObjectReferenceSegment")),
+            Sequence("PROFILE", Ref("ObjectReferenceSegment")),
+            Sequence("ROLE", Ref("ObjectReferenceSegment")),
+            Sequence("TRIGGER", Ref("ObjectReferenceSegment")),
+            Sequence("TYPE", Ref("ObjectReferenceSegment")),
+            Sequence("VIEW", Ref("TableReferenceSegment")),
+            Sequence("DATABASE", Ref("DatabaseReferenceSegment")),
+            Sequence("FILE", Ref("ObjectReferenceSegment")),
+            Sequence("TABLE", Ref("TableReferenceSegment")),
+            Sequence("USER", Ref("ObjectReferenceSegment")),
+        ),
+        Sequence(
+            OneOf("AS", "IS", optional=True),
+            Ref("QuotedLiteralSegment"),
+            optional=True,
+        ),
+    )
+
+
+# Rename table statement
+@teradata_dialect.segment()
+class TdRenameStatementSegment(BaseSegment):
+    """A `RENAME TABLE` statement.
+
+    https://docs.teradata.com/reader/eWpPpcMoLGQcZEoyt5AjEg/Kl~F4lxPauOELYJVuFLjag
+    RENAME TABLE OLD_TABLENAME (TO|AS) NEW_TABLENAME
+    """
+
+    type = "rename_table_statement"
+    match_grammar = Sequence(
+        "RENAME",
+        "TABLE",
+        Ref("TableReferenceSegment"),
+        OneOf(
+            "TO",
+            "AS",
+        ),
+        Ref("TableReferenceSegment"),
+    )
+
+
+# Adding Teradata specific DATE FORMAT 'YYYYMM'
+@teradata_dialect.segment(replace=True)
+class DatatypeSegment(BaseSegment):
+    """A data type segment.
+
+    DATE FORMAT 'YYYY-MM-DD'
+    """
+
+    type = "td_internal_data_type"
+    match_grammar = Sequence(
+        Ref("DatatypeIdentifierSegment"),
+        Bracketed(
+            OneOf(
+                Delimited(Ref("ExpressionSegment"), delimiter=Ref("CommaSegment")),
+                # The brackets might be empty for some cases...
+                optional=True,
+            ),
+            # There may be no brackets for some data types
+            optional=True,
+        ),
+        Sequence(  # FORMAT 'YYYY-MM-DD',
+            "FORMAT", Ref("QuotedLiteralSegment"), optional=True
+        ),
+    )
+
+
+@teradata_dialect.segment()
+class TeradataCastSegment(BaseSegment):
+    """A casting operation using Teradata conversion syntax.
+
+    https://docs.teradata.com/reader/kmuOwjp1zEYg98JsB8fu_A/ypGGhd87xi3E2E7SlNS1Xg
+    # Teradata Conversion Syntax in Explicit Data Type Conversions
+    expression ([data_attribute,] data_type [, data_attribute])
+    with
+
+    data_type := a data type declaration such as INTEGER or DATE
+    data_attribute := a data attribute such as FORMAT, NAMED or  TITLE
+
+    e.g.
+        '9999-12-31' (DATE),
+        '9999-12-31' (DATE FORMAT 'YYYY-MM-DD')
+        '100000' (SMALLINT)
+         DATE FORMAT 'E4,BM4BDD,BY4'
+         DATE '2007-01-01'
+    """
+
+    type = "cast_expression"
+    match_grammar = Bracketed(Ref("DatatypeSegment"))
+
+
+@teradata_dialect.segment(replace=True)
+class ExpressionSegment(BaseSegment):
+    """A expression, either arithmetic or boolean.
+
+    We extend the expression segment in teradata to enable
+    casting.
+    """
+
+    type = "expression"
+    match_grammar = Sequence(
+        Ref("Expression_A_Grammar"),
+        Ref("TeradataCastSegment", optional=True),
+    )
+
+
+# Adding Teradata specific column definitions
+@teradata_dialect.segment(replace=True)
+class ColumnDefinitionSegment(BaseSegment):
+    """A column definition, e.g. for CREATE TABLE or ALTER TABLE."""
+
+    type = "column_definition"
+    match_grammar = Sequence(
+        Ref("ColumnReferenceSegment"),  # Column name
+        Ref("DatatypeSegment"),  # Column type
+        Bracketed(Anything(), optional=True),  # For types like VARCHAR(100)
+        AnyNumberOf(
+            Ref("ColumnConstraintSegment", optional=True),
+            # Adding Teradata specific column definitions
+            Ref("TdColumnConstraintSegment", optional=True),
+        ),
+    )
+
+
+@teradata_dialect.segment()
+class TdColumnConstraintSegment(BaseSegment):
+    """Teradata specific column attributes.
+
+    e.g. CHARACTER SET LATIN | [NOT] (CASESPECIFIC|CS) | (UPPERCASE|UC)
+    """
+
+    type = "td_column_attribute_constraint"
+    match_grammar = Sequence(
+        OneOf(
+            Sequence(  # CHARACTER SET LATIN
+                "CHARACTER", "SET", Ref("SingleIdentifierGrammar")
+            ),
+            Sequence(  # [NOT] CASESPECIFIC
+                Ref.keyword("NOT", optional=True),
+                OneOf("CASESPECIFIC", "CS"),
+            ),
+            OneOf("UPPERCASE", "UC"),
+            Sequence(  # COMPRESS [(1.,3.) | 3. | NULL],
+                "COMPRESS",
+                OneOf(
+                    Bracketed(
+                        Delimited(Ref("LiteralGrammar"), delimiter=Ref("CommaSegment"))
+                    ),
+                    Ref("LiteralGrammar"),
+                    "NULL",
+                    optional=True,
+                ),
+            ),
+        ),
+    )
+
+
+# Create Teradata Create Table Statement
+@teradata_dialect.segment()
+class TdCreateTableOptions(BaseSegment):
+    """CreateTableOptions.
+
+    , NO FALLBACK, NO BEFORE JOURNAL, NO AFTER JOURNAL, CHECKSUM = DEFAULT, DEFAULT MERGEBLOCKRATIO
+    """
+
+    type = "create_table_options_statement"
+    match_grammar = AnyNumberOf(
+        Sequence(
+            Ref("CommaSegment"),
+            OneOf(
+                # [ NO ] FALLBACK [ PROTECTION ]
+                Sequence(
+                    Ref.keyword("NO", optional=True),
+                    "FALLBACK",
+                    Ref.keyword("PROTECTION", optional=True),
+                ),
+                # [NO | DUAL | LOCAL |NOT LOCAL] [AFTER | BEFORE] JOURNAL
+                Sequence(
+                    OneOf(
+                        "NO", "DUAL", "LOCAL", Sequence("NOT", "LOCAL"), optional=True
+                    ),
+                    OneOf("BEFORE", "AFTER", optional=True),
+                    "JOURNAL",
+                ),
+                # CHECKSUM = (ON|OFF|DEFAULT)
+                Sequence(
+                    "CHECKSUM",
+                    Ref("EqualsSegment"),
+                    OneOf(
+                        "ON",
+                        "OFF",
+                        "DEFAULT",
+                    ),
+                ),
+                # (NO|Default) MergeBlockRatio
+                Sequence(
+                    OneOf(
+                        "DEFAULT",
+                        "NO",
+                    ),
+                    "MERGEBLOCKRATIO",
+                ),
+                # MergeBlockRatio = integer [PERCENT]
+                Sequence(
+                    "MERGEBLOCKRATIO",
+                    Ref("EqualsSegment"),
+                    Ref("NumericLiteralSegment"),
+                    Ref.keyword("PERCENT", optional=True),
+                ),
+            ),
+        ),
+    )
+
+
+@teradata_dialect.segment()
+class TdTablePartitioningLevel(BaseSegment):
+    """Partitioning Level.
+
+    https://docs.teradata.com/reader/eWpPpcMoLGQcZEoyt5AjEg/e0GX8Iw16u1SCwYvc5qXzg
+
+    partition_expression or
+    COLUMN [[NO] AUTO COMPRESS] [[ALL BUT] column_partition] [ADD constant]
+
+    column_partition := ([COLUMN|ROW] column_name (, column_name2, ...) NO AUTOCOMPRESS
+
+    partition_expression := CASE_N, RANGE_N, EXTRACT, expression and in case of multi-level in parenthesis
+    """
+
+    type = "td_partitioning_level"
+    match_grammar = OneOf(
+        Sequence(
+            Ref("FunctionNameSegment"),
+            Bracketed(Anything(optional=True)),
+        ),
+        Bracketed(
+            Delimited(
+                Sequence(
+                    Ref("FunctionNameSegment"),
+                    Bracketed(Anything(optional=True)),
+                ),
+                delimiter=Ref("CommaSegment"),
+            ),
+        ),
+    )
+
+
+@teradata_dialect.segment()
+class TdTableConstraints(BaseSegment):
+    """Teradata specific table attributes.
+
+    e.g.
+        UNIQUE PRIMARY INDEX Column_name | ( Column_name, ... )
+        NO PRIMARY INDEX
+        ...
+    """
+
+    type = "td_table_constraint"
+    match_grammar = Sequence(
+        AnyNumberOf(
+            # PRIMARY Index
+            OneOf(
+                Sequence(  # UNIQUE PRIMARY INDEX Column_name | ( Column_name, ... )
+                    Ref.keyword("UNIQUE", optional=True),
+                    "PRIMARY",
+                    "INDEX",
+                    Ref("ObjectReferenceSegment", optional=True),  # primary index name
+                    OneOf(
+                        Bracketed(
+                            Delimited(
+                                Ref("SingleIdentifierGrammar"),
+                                delimiter=Ref("CommaSegment"),
+                            )
+                        ),
+                        Ref("SingleIdentifierGrammar"),
+                    ),
+                ),
+                Sequence("NO", "PRIMARY", "INDEX"),  # NO PRIMARY INDEX
+            ),
+            # PARTITION BY ...
+            Sequence(  # INDEX HOPR_TRN_TRAV_SIN_MP_I ( IND_TIPO_TARJETA );
+                "PARTITION",
+                "BY",
+                Ref("TdTablePartitioningLevel"),
+            ),
+            # Index
+            Sequence(  # INDEX HOPR_TRN_TRAV_SIN_MP_I ( IND_TIPO_TARJETA );
+                Ref.keyword("UNIQUE", optional=True),
+                "INDEX",
+                Ref("ObjectReferenceSegment"),  # Index name
+                Ref.keyword("ALL", optional=True),
+                Bracketed(  # Columns making up  constraint
+                    Delimited(
+                        Ref("ColumnReferenceSegment"), delimiter=Ref("CommaSegment")
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+@teradata_dialect.segment(replace=True)
+class CreateTableStatementSegment(BaseSegment):
+    """A `CREATE [MULTISET| SET] TABLE` statement."""
+
+    type = "create_table_statement"
+    match_grammar = Sequence(
+        "CREATE",
+        Sequence("OR", "REPLACE", optional=True),
+        # Adding Teradata specific [MULTISET| SET]
+        OneOf("SET", "MULTISET", optional=True),
+        OneOf(Sequence("GLOBAL", "TEMPORARY"), "VOLATILE", optional=True),
+        "TABLE",
+        Sequence("IF", "NOT", "EXISTS", optional=True),
+        Ref("TableReferenceSegment"),
+        # , NO FALLBACK, NO BEFORE JOURNAL, NO AFTER JOURNAL
+        OneOf(Ref("TdCreateTableOptions"), optional=True),
+        OneOf(
+            # Columns and comment syntax:
+            Sequence(
+                Bracketed(
+                    Delimited(
+                        OneOf(
+                            Ref("ColumnDefinitionSegment"),
+                            Ref("TableConstraintSegment"),
+                        ),
+                        delimiter=Ref("CommaSegment"),
+                    )
+                ),
+                Ref("CommentClauseSegment", optional=True),
+            ),
+            # Create AS syntax:
+            Sequence("AS", Ref("SelectableGrammar")),
+            # Create like syntax
+            Sequence("LIKE", Ref("TableReferenceSegment")),
+        ),
+        # PRIMARY INDEX( COD_TARJETA, COD_EST, IND_TIPO_TARJETA, FEC_ANIO_MES )
+        OneOf(Ref("TdTableConstraints"), optional=True),
+    )
+
+
+# Update
+@teradata_dialect.segment(replace=True)
+class UpdateStatementSegment(BaseSegment):
+    """A `Update from` statement.
+
+    The UPDATE statement FROM clause is a Teradata extension to the
+    ANSI SQL:2011 standard.
+
+    UPDATE (<table name> | FROM Statement)
+    SET <set clause list> [ WHERE <search condition> ]
+    """
+
+    type = "update_statement"
+    match_grammar = StartsWith("UPDATE")
+    parse_grammar = Sequence(
+        "UPDATE",
+        OneOf(
+            Ref("TableReferenceSegment"),
+            Ref("FromUpdateClauseSegment"),
+            Sequence(
+                Ref("TableReferenceSegment"),
+                Ref("FromUpdateClauseSegment"),
+            ),
+        ),
+        Ref("SetClauseListSegment"),
+        Ref("WhereClauseSegment", optional=True),
+    )
+
+
+@teradata_dialect.segment()
+class FromUpdateClauseSegment(BaseSegment):
+    """A `FROM` clause like in `SELECT` but terminated by SET."""
+
+    type = "from_in_update_clause"
+    match_grammar = StartsWith("FROM", terminator=Ref.keyword("SET"))
+    parse_grammar = Sequence(
+        "FROM",
+        Delimited(
+            # Optional old school delimited joins
+            Ref("FromExpressionElementSegment"),
+            delimiter=Ref("CommaSegment"),
+        ),
+    )
+
+
+# Adding Teradata specific statements
+@teradata_dialect.segment(replace=True)
+class StatementSegment(BaseSegment):
+    """A generic segment, to any of its child subsegments."""
+
+    type = "statement"
+
+    parse_grammar = ansi_dialect.get_segment("StatementSegment").parse_grammar.copy(
+        insert=[
+            Ref("TdCollectStatisticsStatementSegment"),
+            Ref("BteqStatementSegment"),
+            Ref("TdRenameStatementSegment"),
+            Ref("QualifyClauseSegment"),
+            Ref("TdCommentStatementSegment"),
+        ],
+    )
+
+    match_grammar = ansi_dialect.get_segment("StatementSegment").match_grammar.copy()
+
+
+teradata_dialect.add(
+    TdCastIdentifierSegment=Sequence(
+        OneOf("DATE", "TIMESTAMP"), Ref("ExpressionSegment")
+    ),
+)
+
+teradata_dialect.replace(
+    SingleIdentifierGrammar=OneOf(
+        Ref("NakedIdentifierSegment"),
+        Ref("QuotedIdentifierSegment"),
+        Ref("TdCastIdentifierSegment"),
+    )
+)
+
+
+@teradata_dialect.segment()
+class QualifyClauseSegment(BaseSegment):
+    """A `QUALIFY` clause like in `SELECT`."""
+
+    type = "qualify_clause"
+    match_grammar = StartsWith(
+        "QUALIFY",
+        terminator=OneOf("ORDER", "LIMIT", "QUALIFY", "WINDOW"),
+        enforce_whitespace_preceding_terminator=True,
+    )
+    parse_grammar = Sequence(
+        "QUALIFY",
+        Indent,
+        OptionallyBracketed(Ref("ExpressionSegment")),
+        Dedent,
+    )
+
+
+@teradata_dialect.segment(replace=True)
+class SelectStatementSegment(BaseSegment):
+    """A `SELECT` statement.
+
+    https://dev.mysql.com/doc/refman/5.7/en/select.html
+    """
+
+    type = "select_statement"
+    match_grammar = ansi_dialect.get_segment(
+        "SelectStatementSegment"
+    ).match_grammar.copy()
+
+    parse_grammar = ansi_dialect.get_segment(
+        "SelectStatementSegment"
+    ).parse_grammar.copy(
+        insert=[Ref("QualifyClauseSegment", optional=True)],
+        before=Ref("OrderByClauseSegment", optional=True),
+    )
+
+
+@teradata_dialect.segment(replace=True)
+class UnorderedSelectStatementSegment(BaseSegment):
+    """An unordered `SELECT` statement.
+
+    https://dev.mysql.com/doc/refman/5.7/en/select.html
+    """
+
+    type = "select_statement"
+    match_grammar = ansi_dialect.get_segment(
+        "UnorderedSelectStatementSegment"
+    ).match_grammar.copy()
+
+    parse_grammar = ansi_dialect.get_segment(
+        "UnorderedSelectStatementSegment"
+    ).parse_grammar.copy(
+        insert=[Ref("QualifyClauseSegment", optional=True)],
+        before=Ref("OverlapsClauseSegment", optional=True),
+    )
+
+
+@teradata_dialect.segment(replace=True)
+class SelectClauseModifierSegment(BaseSegment):
+    """Things that come after SELECT but before the columns.
+
+    Adds NORMALIZE clause: https://docs.teradata.com/r/2_MC9vCtAJRlKle2Rpb0mA/UuxiA0mklFgv~33X5nyKMA
+    """
+
+    type = "select_clause_modifier"
+    match_grammar = OneOf(
+        "DISTINCT",
+        "ALL",
+        Sequence(
+            "NORMALIZE",
+            OneOf(
+                Sequence(
+                    "ON",
+                    "MEETS",
+                    "OR",
+                    "OVERLAPS",
+                ),
+                Sequence(
+                    "ON",
+                    "OVERLAPS",
+                ),
+                Sequence(
+                    "ON",
+                    "OVERLAPS",
+                    "OR",
+                    "MEETS",
+                ),
+                optional=True,
+            ),
+        ),
+    )
+
+
+@teradata_dialect.segment(replace=True)
+class SelectClauseSegment(BaseSegment):
+    """A group of elements in a select target statement.
+
+    Remove OVERLAPS as a terminator as this can be part of SelectClauseModifierSegment
+    """
+
+    type = "select_clause"
+    match_grammar = StartsWith(
+        Sequence("SELECT", Ref("WildcardExpressionSegment", optional=True)),
+        terminator=OneOf(
+            "FROM",
+            "WHERE",
+            "ORDER",
+            "LIMIT",
+            Ref("SetOperatorSegment"),
+        ),
+        enforce_whitespace_preceding_terminator=True,
+    )
+
+    parse_grammar = ansi_dialect.get_segment("SelectClauseSegment").parse_grammar.copy()
+\n[end of src/sqlfluff/dialects/dialect_teradata.py]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.

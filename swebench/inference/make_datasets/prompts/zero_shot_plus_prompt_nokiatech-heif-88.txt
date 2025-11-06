@@ -1,0 +1,1572 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+Alloc-dealloc-mismatch in iteminfobox.cpp:127:5
+
+## System info
+
+Ubuntu X64, gcc (Ubuntu 5.5.0-12ubuntu1), heif (latest master [2fc78e](https://github.com/nokiatech/heif/commit/2fc78e4c80e9dbd22b5b0e09c137985d21d75512))
+
+## Configure
+
+cmake ../srcs -DCMAKE_CXX_FLAGS="-fsanitize=address -g" -DCMAKE_C_FLAGS="-fsanitize=address -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" 
+
+## Command line
+
+modify example.cpp, use example7() to receive filename from command-line.
+
+./build/bin/example @@
+
+## AddressSanitizer output
+
+```
+=================================================================
+==36085==ERROR: AddressSanitizer: alloc-dealloc-mismatch (malloc vs operator delete) on 0x60c000000040
+    #0 0x51bac0 in operator delete(void*) /home/seviezhou/llvm-6.0.0/projects/compiler-rt/lib/asan/asan_new_delete.cc:149
+    #1 0x739be0 in std::_Sp_counted_ptr<FDItemInfoExtension*, (__gnu_cxx::_Lock_policy)2>::_M_dispose() /usr/lib/gcc/x86_64-linux-gnu/8/../../../../include/c++/8/bits/shared_ptr_base.h:377:9
+    #2 0x5b2a1f in std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release() /usr/lib/gcc/x86_64-linux-gnu/8/../../../../include/c++/8/bits/shared_ptr_base.h:155:6
+    #3 0x734570 in std::__shared_count<(__gnu_cxx::_Lock_policy)2>::~__shared_count() /usr/lib/gcc/x86_64-linux-gnu/8/../../../../include/c++/8/bits/shared_ptr_base.h:728:11
+    #4 0x734570 in std::__shared_ptr<ItemInfoExtension, (__gnu_cxx::_Lock_policy)2>::~__shared_ptr() /usr/lib/gcc/x86_64-linux-gnu/8/../../../../include/c++/8/bits/shared_ptr_base.h:1167
+    #5 0x734570 in ItemInfoEntry::~ItemInfoEntry() /home/seviezhou/heif/srcs/common/iteminfobox.cpp:143
+    #6 0x733188 in ItemInfoBox::parseBox(ISOBMFF::BitStream&) /home/seviezhou/heif/srcs/common/iteminfobox.cpp:127:5
+    #7 0x767976 in MetaBox::parseBox(ISOBMFF::BitStream&) /home/seviezhou/heif/srcs/common/metabox.cpp:278:26
+    #8 0x544693 in HEIF::HeifReaderImpl::handleMeta(HEIF::StreamIO&) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:559:17
+    #9 0x530462 in HEIF::HeifReaderImpl::readStream() /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:846:37
+    #10 0x52c863 in HEIF::HeifReaderImpl::initialize(HEIF::StreamInterface*) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:120:31
+    #11 0x52c2a1 in HEIF::HeifReaderImpl::initialize(char const*) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:94:14
+    #12 0x51f2f3 in main /home/seviezhou/heif/srcs/examples/example.cpp:41:17
+    #13 0x7fcc5100b83f in __libc_start_main /build/glibc-e6zv40/glibc-2.23/csu/../csu/libc-start.c:291
+    #14 0x41f0b8 in _start (/home/seviezhou/heif/build/bin/example+0x41f0b8)
+
+0x60c000000040 is located 0 bytes inside of 120-byte region [0x60c000000040,0x60c0000000b8)
+allocated by thread T0 here:
+    #0 0x4e32c8 in __interceptor_malloc /home/seviezhou/llvm-6.0.0/projects/compiler-rt/lib/asan/asan_malloc_linux.cc:88
+    #1 0x7334e4 in ItemInfoEntry::parseBox(ISOBMFF::BitStream&) /home/seviezhou/heif/srcs/common/iteminfobox.cpp:305:33
+    #2 0x767976 in MetaBox::parseBox(ISOBMFF::BitStream&) /home/seviezhou/heif/srcs/common/metabox.cpp:278:26
+    #3 0x544693 in HEIF::HeifReaderImpl::handleMeta(HEIF::StreamIO&) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:559:17
+    #4 0x530462 in HEIF::HeifReaderImpl::readStream() /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:846:37
+    #5 0x52c863 in HEIF::HeifReaderImpl::initialize(HEIF::StreamInterface*) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:120:31
+    #6 0x52c2a1 in HEIF::HeifReaderImpl::initialize(char const*) /home/seviezhou/heif/srcs/reader/heifreaderimpl.cpp:94:14
+    #7 0x7fcc5100b83f in __libc_start_main /build/glibc-e6zv40/glibc-2.23/csu/../csu/libc-start.c:291
+
+SUMMARY: AddressSanitizer: alloc-dealloc-mismatch /home/seviezhou/llvm-6.0.0/projects/compiler-rt/lib/asan/asan_new_delete.cc:149 in operator delete(void*)
+==36085==HINT: if you don't care about these errors you may set ASAN_OPTIONS=alloc_dealloc_mismatch=0
+==36085==ABORTING
+```
+
+## POC
+
+[alloc-dealloc-mismatch-parseBox-iteminfobox-127.zip](https://github.com/nokiatech/heif/files/5032675/alloc-dealloc-mismatch-parseBox-iteminfobox-127.zip)
+</issue>
+
+<code>
+[start of README.md]\nREADME.md
+# High Efficiency Image File Format (HEIF)
+HEIF is a visual media container format standardized by the Moving Picture Experts Group (MPEG) for storage and sharing of images and image sequences. It is based on the well-known ISO Base Media File Format (ISOBMFF) standard. HEIF Reader/Writer Engine is an implementation of HEIF standard in order to demonstrate its powerful features and capabilities.
+
+Please follow this **[link](https://nokiatech.github.io/heif)** to access HEIF Web-Site.
+You can also check the **[Wiki](https://github.com/nokiatech/heif/wiki)** pages for more information.
+
+For MIAF specific code, please switch to the [MIAF branch](https://github.com/nokiatech/heif/tree/miaf).
+
+## News:
+[25.06.2020] v3.6.0 Release: Added support for several new properties, image items with decoding dependencies, Extended type box and Type combination box, associating properties for entity groups, and reader support for segmented tracks. Minor improvements and code cleanup.
+
+[10.07.2019] v3.5.0 Release: Improved support for JPEGs and edit lists. Bug fixes, minor improvements and code cleanup.
+
+[06.11.2018] v3.4.0 Release: Java API improvements. Bug fixes, code cleanup and robustness improvements.
+
+[13.06.2018] v3.3.0 Release: Java desktop build added, Java API includes track and image sequence as well as entity grouping support.
+
+[06.04.2018] v3.2 Release. Two new APIs added, a Java API which wraps the C++ libraries using JNI and a convenience C++ API (which is used by the Java API) that wraps the underlying reader and writer. The Java API is expected to remain relatively stable, however the new C++ API will most likely change in the future.
+
+[14.03.2018] v3.1 Release. Reader API update, bug fixes and examples update.
+
+[05.03.2018] Code updated and tagged v3.0. Writer executable replaced with writer library / API. Implementation is based on HEIF standard specification [ISO/IEC 23008-12:2017](http://standards.iso.org/ittf/PubliclyAvailableStandards/c066067_ISO_IEC_23008-12_2017.zip) that is available from iso.org web pages.
+
+[09.03.2017] ISO/IEC 23008-12 second edition includes support for the interchange of multi-layered images. The source code now includes structures that are specified in this second edition. Simple support for AVC is also added. Minor bug fixes are included in this update. Example configuration files for generating multi-layered streams can be found in the Wiki.
+
+[24.02.2016] HEIF source code and website is updated to reflect the latest HEIF specification changes and various fixes. Please note that backwards compatibility is not maintained during this update.
+
+[24.02.2016] HEIF conformance test candidate files can be found **[here](https://github.com/nokiatech/heif_conformance)**
+
+## Features:
+HEIF is a media container format. It is not an image or video encoder per se. Hence, the quality of the visual media depends highly on the proper usage of visual media encoder (e.g. HEVC). Current standard allows containing HEVC/AVC/JPEG encoded bitstreams. This can be easily extended to future visual media codecs. It has many powerful features which are currently not present in other image file formats. Some of these features are:
+* Encapsulate images coded using HEVC/SHVC/MV-HEVC/AVC/JPEG.
+* Encapsulate image sequences coded using HEVC/SHVC/MV-HEVC/AVC.
+* Storage based on widely adopted ISO Base Media File Format (ISOBMFF)
+* Supports efficient storage of image bursts and cinemagraphs
+* Supports computational photography use cases
+* Supports both lossy and lossless image data storage
+* A better and easy way to distribute still images, image collections and related metadata.
+
+Please follow this **[link](https://nokiatech.github.io/heif/examples.html)** to see HEIF file examples.
+
+## Contents of the Repository:
+This repository contains the following items:
+* ISO Base Media File Format (ISOBMFF) box parse/write source code (under srcs/common/)
+* HEIF Reader API and Library (under srcs/api/reader/)
+* HEIF Writer API and Library (under srcs/api/writer/)
+* HEIF Reader/Writer Java API (under srcs/api-java/)
+* HEIF Reader/Writer convenience C++ API (under srcs/api-cpp/)
+* HEIF Reader API Usage Example Code (under srcs/examples/)
+* HEIF Source Code Documentation (**[Doxygen](http://www.stack.nl/~dimitri/doxygen/)** generator under docs/)
+* HEIF Web Site Content (in **[gh-pages branch](https://github.com/nokiatech/heif/tree/gh-pages)**)
+* HEIF Reader JavaScript Implementation (in **[gh-pages branch](https://github.com/nokiatech/heif/tree/gh-pages)**)
+
+## Building source:
+Prerequisites: **[cmake](https://cmake.org/)** and compiler supporting C++11 in PATH.
+```
+cd heif/build
+cmake --help
+cmake ../srcs -G"<Generator listed by above command for your target platform>"
+cmake --build .
+```
+
+## Building Java API for Windows or Linux
+Prerequisites: Java version 8 or newer, Gradle.
+
+First build the C/C++ library as described above.
+
+After that
+```
+cd heif/build/java-desktop
+gradle build
+```
+Note that in order to run the Java API you need to have the HEIF JNI library built in the earlier step (heifjni.dll or heifjni.so) in the Java library search path.
+
+## Building Java API for Android:
+Prerequisites: Android SDK & NDK
+Import the project files under heif/build/android into Android Studio and build the library
+
+See **[wiki page](https://github.com/nokiatech/heif/wiki/I.-How-to-build-HEIF-Source-Code)** for more information and platform specific instructions.
+
+## License:
+Please see **[LICENSE.TXT](https://github.com/nokiatech/heif/blob/master/LICENSE.TXT)** file for the terms of use of the contents of this repository.
+
+All the example media files (*.heic, *.png, *.jpg, *.gif) in this repository are under copyright © Nokia Technologies 2015-2018.
+
+For more information/questions/source code/commercial licensing related issues, please contact: <heif@nokia.com>
+
+### **Copyright (c) 2015-2020, Nokia Technologies Ltd.**
+### **All rights reserved.**
+
+\n[end of README.md]\n[start of build/allocator_test.cpp]\nbuild/allocator_test.cpp
+#include <vector>
+#include <list>
+#include <malloc.h>
+template <typename T>
+class Allocator
+{
+public:
+    using value_type = T;
+    Allocator() noexcept
+    {
+    }
+
+    ~Allocator() = default;
+
+    template <class U>
+    Allocator(const Allocator<U>&) noexcept
+    {
+    }
+
+    T* allocate(const std::size_t n) const
+    {
+        return static_cast<T*>(malloc(n*sizeof(T)));
+    }
+
+    void deallocate(T* const p, std::size_t) const noexcept
+    {
+        return free((void*)p);
+    }
+
+    template <class U>
+    bool operator==(const Allocator<U>&) const noexcept
+    {
+        return true;
+    }
+    template <class U>
+    bool operator!=(const Allocator<U>&) const noexcept
+    {
+        return false;
+    }
+};
+class Test
+{
+    std::vector<unsigned char> test;
+public:
+    Test(){}
+    ~Test(){};
+};
+
+int main(int argc,char* argv[])
+{
+    std::list<Test,Allocator<Test> > test;
+    Test a;
+    test.push_back(a);
+    return 0;
+}\n[end of build/allocator_test.cpp]\n[start of docs/toc.h]\ndocs/toc.h
+/*! \mainpage High Efficiency Image File Format Implementation APIs:
+* <hr>
+* Android Java/JNI API that combines both reader and writer operations see com.nokia.heif.HEIF class.
+* <br>
+* It internally relies on native c++ API below:
+* <hr>
+* C++ Object based API that combines both reader and writer operations see HEIFPP::Heif class.
+* <br>
+* It internally wraps APIs below:
+* <hr>
+* C++ HEIF writing API see HEIF::Writer class.
+* <hr>
+* C++ HEIF reading API see HEIF::Reader class.
+
+*/\n[end of docs/toc.h]\n[start of build/ios/LICENSE.md]\nbuild/ios/LICENSE.md
+Copyright (c) 2011-2014, Andrew Fischer <andrew@ltengsoft.com>
+
+Copyright (c) 2017, Alexander Widerberg <widerbergaren@gmail.com>
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+\n[end of build/ios/LICENSE.md]\n[start of srcs/api-cpp/ItemProperty.h]\nsrcs/api-cpp/ItemProperty.h
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#pragma once
+
+#include <Heif.h>
+
+namespace HEIFPP
+{
+    class ItemProperty
+    {
+        friend class Item;
+        friend class Heif;
+
+    public:
+        virtual ~ItemProperty();
+
+        /** Returns the type of the property */
+        const HEIF::ItemPropertyType& getType() const;
+
+        /** Returns the type of the property */
+        const HEIF::FourCC& rawType() const;
+
+        /** Sets the custom user data
+         *  @param [in] aContext Pointer to the custom data */
+        void setContext(const void* aContext);
+
+        /** Gets the custom user data
+         *  @return void* Pointer to the custom user data */
+        const void* getContext() const;
+
+        const HEIF::PropertyId& getId() const;
+
+        /** Returns if the property is a transformative property. */
+        bool isTransformative() const;
+
+    protected:
+        void setId(const HEIF::PropertyId& id);
+        void link(Item* aItem);
+        void unlink(Item* aItem);
+        virtual HEIF::ErrorCode load(HEIF::Reader* aReader, const HEIF::PropertyId& aId);
+        virtual HEIF::ErrorCode save(HEIF::Writer* aWriter) = 0;
+
+        ItemProperty(Heif* aHeif, const HEIF::ItemPropertyType& aType, const HEIF::FourCC& aRawType, bool aIsTransform);
+        void setIsTransformative(bool aIsTransformative);
+        HEIFPP::Result setRawType(const HEIF::FourCC&);
+
+    private:
+        Heif* mHeif;
+        HEIF::PropertyId mId;
+
+        HEIF::FourCC mRawType;
+        HEIF::ItemPropertyType mType;
+
+        LinkArray<Item*> mLinks;
+        const void* mContext;
+        bool mIsTransform;
+
+        ItemProperty& operator=(const ItemProperty&) = delete;
+        ItemProperty& operator=(ItemProperty&&) = delete;
+        ItemProperty(const ItemProperty&)       = delete;
+        ItemProperty(ItemProperty&&)            = delete;
+        ItemProperty()                          = delete;
+    };
+}  // namespace HEIFPP
+\n[end of srcs/api-cpp/ItemProperty.h]\n[start of srcs/api-cpp/EntityGroup.h]\nsrcs/api-cpp/EntityGroup.h
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+#pragma once
+
+#include "Heif.h"
+
+namespace HEIFPP
+{
+    class EntityGroup
+    {
+        friend class Heif;
+
+    public:
+        EntityGroup(Heif* aHeif, const HEIF::FourCC& aType);
+        virtual ~EntityGroup();
+
+        void setContext(const void* aContext);
+        const void* getContext() const;
+
+        const HEIF::GroupId& getId() const;
+        const HEIF::FourCC& getType() const;
+        std::uint32_t getEntityCount() const;
+
+        bool isItem(std::uint32_t) const;
+        Item* getItem(std::uint32_t);
+        const Item* getItem(std::uint32_t) const;
+
+        bool isTrack(std::uint32_t) const;
+        Track* getTrack(std::uint32_t);
+        const Track* getTrack(std::uint32_t) const;
+
+        bool isSample(std::uint32_t) const;
+        Sample* getSample(std::uint32_t);
+        const Sample* getSample(std::uint32_t) const;
+
+
+        void addItem(Item* aItem);
+        void addTrack(Track* aTrack);
+        void addSample(Sample* aSample);
+
+        virtual void removeEntity(std::uint32_t);
+        void removeItem(Item* aItem);
+        void removeTrack(Track* aTrack);
+        virtual void removeSample(Sample* aSample);
+
+        bool hasItems() const;
+        bool hasTracks() const;
+        bool hasSamples() const;
+
+    protected:
+        void setId(const HEIF::GroupId& aId);
+        bool addEntity(Item*, Track*, Sample*, std::int32_t&);
+        bool removeEntity(Item*, Track*, Sample*, std::int32_t&);
+
+    private:
+        Heif* mHeif;
+        HEIF::GroupId mId;
+        HEIF::FourCC mType;
+        class Entity
+        {
+        public:
+            Entity(Item* aItem) noexcept;
+            Entity(Track* aTrack) noexcept;
+            Entity(Sample* aSample) noexcept;
+            virtual ~Entity();
+            bool isItem() const;
+            bool isTrack() const;
+            bool isSample() const;
+            Item* item();
+            Track* track();
+            Sample* sample();
+            const Item* item() const;
+            const Track* track() const;
+            const Sample* sample() const;
+            void removeFromGroup(EntityGroup*);
+            void addToGroup(EntityGroup*);
+
+        private:
+            Item* mItem;
+            Sample* mSample;
+            Track* mTrack;
+        };
+        std::vector<Entity> mItems;
+        const void* mContext;
+        EntityGroup& operator=(const EntityGroup&) = delete;
+        EntityGroup& operator=(EntityGroup&&) = delete;
+        EntityGroup(const EntityGroup&)       = delete;
+        EntityGroup(EntityGroup&&)            = delete;
+    };
+}  // namespace HEIFPP
+\n[end of srcs/api-cpp/EntityGroup.h]\n[start of srcs/api-cpp/AVCDecoderConfiguration.h]\nsrcs/api-cpp/AVCDecoderConfiguration.h
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#pragma once
+
+#include <DecoderConfiguration.h>
+
+namespace HEIFPP
+{
+    class AVCDecoderConfiguration : public HEIFPP::DecoderConfig
+    {
+    public:
+        AVCDecoderConfiguration(Heif* aHeif);
+        AVCDecoderConfiguration(Heif* aHeif, const HEIF::FourCC& aType);
+        ~AVCDecoderConfiguration() override = default;
+
+        /** Returns the whole configuration as a block
+         * @param [out] data: Reference to where the data should be copied
+         * @param [out] size: The size of the data copied */
+        void getConfig(std::uint8_t*& data, std::uint32_t& size) const override;
+
+        /** Sets the decoder data as a block
+         * @param [in] data: Pointer to the data
+         * @param [in] size: The size of the data */
+        HEIF::ErrorCode setConfig(const std::uint8_t* data, std::uint32_t size) override;
+
+    protected:
+        HEIF::ErrorCode convertToRawData(const HEIF::Array<HEIF::DecoderSpecificInfo>& aConfig,
+                                         std::uint8_t*& aData,
+                                         std::uint32_t& aSize) const override;
+        HEIF::ErrorCode convertFromRawData(const std::uint8_t* aData, std::uint32_t aSize) override;
+
+    private:
+        AVCDecoderConfiguration& operator=(const AVCDecoderConfiguration&) = delete;
+        AVCDecoderConfiguration& operator=(AVCDecoderConfiguration&&) = delete;
+        AVCDecoderConfiguration(const AVCDecoderConfiguration&)       = delete;
+        AVCDecoderConfiguration(AVCDecoderConfiguration&&)            = delete;
+        AVCDecoderConfiguration()                                     = delete;
+    };
+
+}  // namespace HEIFPP
+\n[end of srcs/api-cpp/AVCDecoderConfiguration.h]\n[start of srcs/api-cpp/XMPItem.cpp]\nsrcs/api-cpp/XMPItem.cpp
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#include "XMPItem.h"
+
+#include <heifreader.h>
+#include <heifwriter.h>
+
+using namespace HEIFPP;
+
+XMPItem::XMPItem(Heif* aHeif)
+    : MimeItem(aHeif)
+{
+    setContentType("application/rdf+xml");
+}
+HEIF::ErrorCode XMPItem::load(HEIF::Reader* aReader, const HEIF::ImageId& aId)
+{
+    HEIF::ErrorCode error;
+    error = MimeItem::load(aReader, aId);
+    return error;
+}
+HEIF::ErrorCode XMPItem::save(HEIF::Writer* aWriter)
+{
+    HEIF::ErrorCode error;
+    error = MimeItem::save(aWriter);
+    return error;
+}
+\n[end of srcs/api-cpp/XMPItem.cpp]\n[start of srcs/api-cpp/AudioSample.cpp]\nsrcs/api-cpp/AudioSample.cpp
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2018 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#include "AudioSample.h"
+
+using namespace HEIFPP;
+
+AudioSample::AudioSample(Heif* aHeif)
+    : Sample(aHeif)
+{
+    mIsAudio = true;
+}
+
+HEIF::ErrorCode AudioSample::load(HEIF::Reader* aReader,
+                                  const HEIF::SequenceId& aTrackId,
+                                  const HEIF::SampleInformation& aInfo)
+{
+    HEIF::ErrorCode errorcode = HEIF::ErrorCode::OK;
+    errorcode                 = Sample::load(aReader, aTrackId, aInfo);
+    return errorcode;
+}
+HEIF::ErrorCode AudioSample::save(HEIF::Writer* aWriter)
+{
+    HEIF::ErrorCode error;
+    error = Sample::save(aWriter);
+    return error;
+}\n[end of srcs/api-cpp/AudioSample.cpp]\n[start of srcs/api-cpp/CodedImageItem.h]\nsrcs/api-cpp/CodedImageItem.h
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#pragma once
+
+#include <ImageItem.h>
+
+namespace HEIFPP
+{
+    class DecoderConfig;
+    class CodedImageItem : public HEIFPP::ImageItem
+    {
+    public:
+        ~CodedImageItem() override;
+
+        /** Returns the DecoderConfiguration of the image */
+        DecoderConfig* getDecoderConfiguration();
+        const DecoderConfig* getDecoderConfiguration() const;
+
+        /** Sets a decoder configuration for the image
+         * @param [in] aConfig: The decoder configuration to be added. */
+        Result setDecoderConfiguration(DecoderConfig* aConfig);
+
+        /** Sets the item data for the image
+         * @param [in] aData: A pointer to the data.
+         * @param [in] aLength: The amount of data. */
+        void setItemData(const std::uint8_t* aData, std::uint64_t aLength);
+
+        /** Returns the size of the item data */
+        std::uint64_t getItemDataSize() const;
+
+        /** Returns a pointer to the item data */
+        const std::uint8_t* getItemData();
+
+        /** Returns the decoder code type of the image. */
+        const HEIF::FourCC& getDecoderCodeType() const;
+
+        /** Returns the media format of the image. */
+        HEIF::MediaFormat getMediaFormat() const;
+
+        /** Returns the amount of base images associated with this coded image. */
+        std::uint32_t getBaseImageCount() const;
+
+        /** Get indexed base image associated with this coded image.
+         * @param [in] aIndex: The index of the base image.*/
+        ImageItem* getBaseImage(std::uint32_t aIndex);
+        const ImageItem* getBaseImage(std::uint32_t aIndex) const;
+
+        /** Adds new base image reference to aImage
+         * @param [in] aImage: The image to be added. */
+        void addBaseImage(ImageItem* aImage);
+
+        /** Removes all base image references to aImage.
+         * @param [in] aImage: The image to be removed. */
+        void removeBaseImage(ImageItem* aImage);
+
+        /** Removes the indexed base image reference.
+         * @param [in] aIndex: Index to be removed. */
+        void removeBaseImage(std::uint32_t aIndex);
+
+        /** Sets the indexed base image reference.
+         * @param [in] aIndex: The index where to set the image
+         * @param [in] aImage: The image to be set. */
+        void setBaseImage(std::uint32_t aIndex, ImageItem* aImage);
+
+        /** Sets the base image reference of aOldImage to aNewImage
+         * @param [in] aOldImage: Image to be removed.
+         * @param [in] aNewImage: Image  to be added. */
+        void setBaseImage(ImageItem* aOldImage, ImageItem* aNewImage);
+
+        /** Reserves room for base images
+         * @param [in] aCount: The amount of images to be reserved. */
+        void reserveBaseImages(std::uint32_t aCount);
+
+    protected:
+        // serialization
+        HEIF::ErrorCode load(HEIF::Reader* aReader, const HEIF::ImageId& aId) override;
+        HEIF::ErrorCode save(HEIF::Writer* aWriter) override;
+
+        virtual bool getBitstream(std::uint8_t*& aData, std::uint64_t& aSize) = 0;
+        CodedImageItem(Heif* aHeif, const HEIF::FourCC& aType, const HEIF::MediaFormat& aFormat);
+        HEIF::MediaFormat mFormat;
+        DecoderConfig* mConfig;
+        std::uint64_t mBufferSize;
+        std::uint8_t* mBuffer;
+        std::vector<ImageItem*> mBaseImages;
+        bool mMandatoryConfiguration;
+
+    private:
+        HEIF::ErrorCode loadItemData();
+
+    private:
+        CodedImageItem& operator=(const CodedImageItem&) = delete;
+        CodedImageItem& operator=(CodedImageItem&&) = delete;
+        CodedImageItem(const CodedImageItem&)       = delete;
+        CodedImageItem(CodedImageItem&&)            = delete;
+        CodedImageItem()                            = delete;
+    };
+}  // namespace HEIFPP
+\n[end of srcs/api-cpp/CodedImageItem.h]\n[start of srcs/api-cpp/HEVCDecoderConfiguration.cpp]\nsrcs/api-cpp/HEVCDecoderConfiguration.cpp
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#include "HEVCDecoderConfiguration.h"
+
+#include <heifreader.h>
+#include <heifwriter.h>
+
+#include <cstring>
+
+#include "H26xTools.h"
+
+using namespace HEIFPP;
+
+HEVCDecoderConfiguration::HEVCDecoderConfiguration(Heif* aHeif)
+    : DecoderConfig(aHeif, HEIF::FourCC("hvc1"))
+{
+}
+HEVCDecoderConfiguration::HEVCDecoderConfiguration(Heif* aHeif, const HEIF::FourCC& aType)
+    : DecoderConfig(aHeif, aType)
+{
+}
+HEIF::ErrorCode HEVCDecoderConfiguration::convertToRawData(const HEIF::Array<HEIF::DecoderSpecificInfo>& aConfig,
+                                                           std::uint8_t*& aData,
+                                                           std::uint32_t& aSize) const
+{
+    aSize = 0;
+    for (std::size_t i = 0; i < aConfig.size; i++)
+    {
+        if ((aConfig[i].decSpecInfoType != HEIF::DecoderSpecInfoType::HEVC_VPS) &&
+            (aConfig[i].decSpecInfoType != HEIF::DecoderSpecInfoType::HEVC_SPS) &&
+            (aConfig[i].decSpecInfoType != HEIF::DecoderSpecInfoType::HEVC_PPS))
+        {
+            return HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+        }
+
+
+        aSize += static_cast<uint32_t>(aConfig[i].decSpecInfoData.size);
+    }
+    std::uint8_t* d = aData = new std::uint8_t[aSize];
+    for (std::size_t i = 0; i < aConfig.size; i++)
+    {
+        std::memcpy(d, aConfig[i].decSpecInfoData.begin(), aConfig[i].decSpecInfoData.size);
+        d += aConfig[i].decSpecInfoData.size;
+    }
+    return HEIF::ErrorCode::OK;
+}
+HEIF::ErrorCode HEVCDecoderConfiguration::convertFromRawData(const std::uint8_t* aData, std::uint32_t aSize)
+{
+    // ISO / IEC 14496 - 15:2017 8.3.3.1 HEVC decoder configuration record :
+    // It is recommended that the arrays be in the order VPS, SPS, PPS, prefix SEI, suffix SEI.
+
+    mConfig.decoderSpecificInfo = HEIF::Array<HEIF::DecoderSpecificInfo>(3);
+
+    // NOTE: only VPS,PPS,SPS is saved here, and we expect all three to exist.
+    NAL_State d;
+    std::uint32_t flags;
+    d.init_parse(aData, aSize);
+    flags = 0;
+    for (;;)
+    {
+        const std::uint8_t* nal_data = nullptr;
+        std::uint64_t nal_len        = 0;
+        if (!d.parse_byte_stream(nal_data, nal_len))
+        {
+            break;
+        }
+        HEIF::DecoderSpecInfoType type;
+        type                = static_cast<HEIF::DecoderSpecInfoType>((nal_data[0] >> 1) & 0x3f);
+        std::uint32_t index = 0;
+        if (type == HEIF::DecoderSpecInfoType::HEVC_VPS)
+        {
+            index = 0;
+        }
+        else if (type == HEIF::DecoderSpecInfoType::HEVC_SPS)
+        {
+            index = 1;
+        }
+        else if (type == HEIF::DecoderSpecInfoType::HEVC_PPS)
+        {
+            index = 2;
+        }
+        else
+        {
+            return HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+        }
+        if ((flags & (1u << index)) != 0)
+        {
+            return HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+        }
+        flags |= 1u << index;
+        mConfig.decoderSpecificInfo[index].decSpecInfoType    = type;
+        mConfig.decoderSpecificInfo[index].decSpecInfoData    = HEIF::Array<uint8_t>(nal_len + 4);
+        mConfig.decoderSpecificInfo[index].decSpecInfoData[0] = mConfig.decoderSpecificInfo[index].decSpecInfoData[1] =
+            mConfig.decoderSpecificInfo[index].decSpecInfoData[2] = 0;
+        mConfig.decoderSpecificInfo[index].decSpecInfoData[3]     = 1;
+        std::memcpy(mConfig.decoderSpecificInfo[index].decSpecInfoData.elements + 4, nal_data, nal_len);
+    }
+    if (flags != 7)
+    {
+        return HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+    }
+    return HEIF::ErrorCode::OK;
+}
+
+HEIF::ErrorCode HEVCDecoderConfiguration::setConfig(const std::uint8_t* aData, std::uint32_t aSize)
+{
+    delete[] mBuffer;
+    mBuffer     = nullptr;
+    mBufferSize = 0;
+    mBuffer     = new std::uint8_t[aSize];
+    std::memcpy(mBuffer, aData, aSize);
+    mBufferSize = aSize;
+    return convertFromRawData(mBuffer, mBufferSize);
+}
+
+void HEVCDecoderConfiguration::getConfig(uint8_t*& aData, std::uint32_t& aSize) const
+{
+    aData = mBuffer;
+    aSize = mBufferSize;
+}\n[end of srcs/api-cpp/HEVCDecoderConfiguration.cpp]\n[start of srcs/api-cpp/EqivGroup.cpp]\nsrcs/api-cpp/EqivGroup.cpp
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2018 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+#include "EqivGroup.h"
+
+using namespace HEIFPP;
+
+EquivalenceGroup::EquivalenceGroup(Heif* aHeif)
+    : EntityGroup(aHeif, "eqiv")
+{
+}
+void EquivalenceGroup::addSample(Sample* aSample, int16_t aOffset, uint16_t aMultiplier)
+{
+    std::int32_t index;
+    if (addEntity(nullptr, nullptr, aSample, index))
+    {
+        mOffsets[aSample] = std::pair<std::int16_t, std::uint16_t>(aOffset, aMultiplier);
+    }
+}
+std::int16_t EquivalenceGroup::getOffset(Sample* aItem)
+{
+    auto it = mOffsets.find(aItem);
+    if (it != mOffsets.end())
+    {
+        return it->second.first;
+    }
+    return 0;
+}
+std::uint16_t EquivalenceGroup::getMultiplier(Sample* aItem)
+{
+    auto it = mOffsets.find(aItem);
+    if (it != mOffsets.end())
+    {
+        return it->second.second;
+    }
+    return 0;
+}
+void EquivalenceGroup::removeEntity(std::uint32_t aIndex)
+{
+    if (aIndex < getEntityCount())
+    {
+        Sample* sample = getSample(aIndex);
+        if (sample)
+        {
+            mOffsets.erase(sample);
+        }
+        EntityGroup::removeEntity(aIndex);
+    }
+}
+void EquivalenceGroup::removeSample(Sample* aSample)
+{
+    std::int32_t index;
+    if (EntityGroup::removeEntity(nullptr, nullptr, aSample, index))
+    {
+        mOffsets.erase(aSample);
+    }
+}
+\n[end of srcs/api-cpp/EqivGroup.cpp]\n[start of srcs/api-cpp/Sample.cpp]\nsrcs/api-cpp/Sample.cpp
+/*
+ * This file is part of Nokia HEIF library
+ *
+ * Copyright (c) 2015-2020 Nokia Corporation and/or its subsidiary(-ies). All rights reserved.
+ *
+ * Contact: heif@nokia.com
+ *
+ * This software, including documentation, is protected by copyright controlled by Nokia Corporation and/ or its
+ * subsidiaries. All rights are reserved. Copying, including reproducing, storing, adapting or translating, any or all
+ * of this material requires the prior written consent of Nokia.
+ */
+
+#include "Sample.h"
+
+#include <cstring>
+
+#include "DecoderConfiguration.h"
+#include "EntityGroup.h"
+#include "H26xTools.h"
+#include "MetaItem.h"
+#include "Track.h"
+#include "heifreader.h"
+#include "heifwriter.h"
+
+using namespace HEIFPP;
+
+Sample::Sample(Heif* aHeif)
+    : mHeif(aHeif)
+    , mType(HEIF::FourCC(static_cast<uint32_t>(0)))
+    , mId(Heif::InvalidSequenceImage)
+    , mSampleType(HEIF::SampleType::OUTPUT_REFERENCE_FRAME)
+    , mDuration(0)
+    , mCompositionOffset(0)
+    , mConfig(nullptr)
+    , mIsAudio(false)
+    , mIsVideo(false)
+    , mMetaItems()
+    , mTrack(nullptr)
+    , mDecodeDependency()
+    , mDecodeDependencyLinks()
+    , mGroups()
+    , mBufferSize(0)
+    , mBuffer(nullptr)
+    , mContext(nullptr)
+{
+    mHeif->addSample(this);
+}
+Sample::~Sample()
+{
+    if (mTrack)
+    {
+        mTrack->setSample(this, nullptr);
+    }
+    for (MetaItem*& meta : mMetaItems)
+    {
+        if (meta)
+        {
+            meta->unlink(this);
+            meta = nullptr;
+        }
+    }
+    // disconnect from groups
+    for (; !mGroups.empty();)
+    {
+        (*mGroups.begin())->removeSample(this);
+    }
+    mMetaItems.clear();
+    setDecoderConfiguration(nullptr);
+
+    mHeif->removeSample(this);
+    delete[] mBuffer;
+    mBuffer     = nullptr;
+    mBufferSize = 0;
+}
+
+void Sample::setContext(const void* aContext)
+{
+    mContext = aContext;
+}
+
+const void* Sample::getContext() const
+{
+    return mContext;
+}
+
+void Sample::link(Sample* aSample)
+{
+    mDecodeDependencyLinks.addLink(aSample);
+}
+void Sample::unlink(Sample* aSample)
+{
+    mDecodeDependencyLinks.removeLink(aSample);
+}
+
+void Sample::link(Track* aTrack)
+{
+    if (mTrack)
+    {
+        unlink(mTrack);
+    }
+    mTrack = aTrack;
+}
+void Sample::unlink(Track* aTrack)
+{
+    if (mTrack == aTrack)
+    {
+        mTrack = nullptr;
+    }
+}
+
+std::uint32_t Sample::getDecodeDependencyCount() const
+{
+    return static_cast<std::uint32_t>(mDecodeDependency.size());
+}
+void Sample::setDecodeDependency(uint32_t aId, Sample* aSample)
+{
+    if (aId < mDecodeDependency.size())
+    {
+        if (mDecodeDependency[aId])
+        {
+            mDecodeDependency[aId]->unlink(this);
+        }
+        mDecodeDependency[aId] = aSample;
+    }
+}
+
+Sample* Sample::getDecodeDependency(uint32_t aId)
+{
+    if (aId < mDecodeDependency.size())
+    {
+        return mDecodeDependency[aId];
+    }
+    return nullptr;
+}
+const Sample* Sample::getDecodeDependency(uint32_t aId) const
+{
+    if (aId < mDecodeDependency.size())
+    {
+        return mDecodeDependency[aId];
+    }
+    return nullptr;
+}
+
+void Sample::addDecodeDependency(Sample* aSample)
+{
+    if (aSample == this)
+    {
+        // ignore self reference.
+        return;
+    }
+    // Use AddItemTo helper to make sure that the sample is added only once.
+    if (AddItemTo(mDecodeDependency, aSample))
+    {
+        aSample->link(this);
+    }
+}
+
+void Sample::removeDecodeDependency(std::uint32_t aId)
+{
+    Sample* smp = getDecodeDependency(aId);
+    if (smp)
+    {
+        smp->unlink(this);
+        mDecodeDependency.erase(mDecodeDependency.begin() + static_cast<std::int32_t>(aId));
+    }
+}
+
+void Sample::removeDecodeDependency(Sample* aSample)
+{
+    if (aSample == nullptr)
+    {
+        return;
+    }
+    if (RemoveItemFrom(mDecodeDependency, aSample))
+    {
+        aSample->unlink(this);
+    }
+}
+
+
+std::uint32_t Sample::getMetadataCount() const
+{
+    return static_cast<uint32_t>(mMetaItems.size());
+}
+
+MetaItem* Sample::getMetadata(uint32_t aIndex)
+{
+    if (aIndex >= mMetaItems.size())
+    {
+        return nullptr;
+    }
+    return mMetaItems[aIndex];
+}
+
+const MetaItem* Sample::getMetadata(uint32_t aIndex) const
+{
+    if (mMetaItems.size() >= aIndex)
+    {
+        return nullptr;
+    }
+    return mMetaItems[aIndex];
+}
+
+void Sample::addMetadata(MetaItem* aMeta)
+{
+    if (aMeta == nullptr)
+    {
+        return;
+    }
+    if (AddItemTo(mMetaItems, aMeta))
+    {
+        aMeta->link(this);
+    }
+}
+
+void Sample::removeMetadata(MetaItem* aMeta)
+{
+    if (aMeta == nullptr)
+    {
+        return;
+    }
+    if (RemoveItemFrom(mMetaItems, aMeta))
+    {
+        aMeta->unlink(this);
+    }
+}
+bool Sample::isAudio() const
+{
+    return mIsAudio;
+}
+bool Sample::isVideo() const
+{
+    return mIsVideo;
+}
+void Sample::setId(const HEIF::SequenceImageId& aId)
+{
+    mId = aId;
+}
+void Sample::setType(const HEIF::FourCC& aType)
+{
+    mType = aType;
+}
+
+const HEIF::FourCC& Sample::getType() const
+{
+    return mType;
+}
+
+void Sample::setCompositionOffset(std::int64_t aOffset)
+{
+    mCompositionOffset = aOffset;
+}
+std::int64_t Sample::getCompositionOffset() const
+{
+    return mCompositionOffset;
+}
+
+
+const HEIF::FourCC& Sample::getDecoderCodeType() const
+{
+    return mType;
+}
+void Sample::setSampleType(const HEIF::SampleType& aType)
+{
+    mSampleType = aType;
+}
+const HEIF::SampleType& Sample::getSampleType() const
+{
+    return mSampleType;
+}
+const HEIF::SequenceImageId& Sample::getId() const
+{
+    return mId;
+}
+void Sample::setDuration(std::uint64_t aDuration)
+{
+    mDuration = aDuration;
+}
+std::uint64_t Sample::getDuration() const
+{
+    return mDuration;
+}
+std::uint32_t Sample::getTimeStampCount() const
+{
+    return static_cast<std::uint32_t>(mTimeStamps.size());
+}
+std::uint64_t Sample::getTimeStamp(uint32_t aIndex) const
+{
+    if (aIndex < mTimeStamps.size())
+    {
+        return mTimeStamps[aIndex];
+    }
+    return 0;
+}
+
+HEIF::ErrorCode Sample::loadSampleData(const HEIF::SequenceId& aTrackId)
+{
+    HEIF::ErrorCode error = HEIF::ErrorCode::OK;
+    if (mBufferSize == 0)
+    {
+        // No data in sample, warn user?
+    }
+    else
+    {
+        if ((getHeif() != nullptr) && (getHeif()->getReaderInstance() != nullptr) && (mConfig != nullptr))
+        {
+            delete[] mBuffer;
+            mBuffer = nullptr;
+            mBuffer = new std::uint8_t[mBufferSize];
+            error   = getHeif()->getReaderInstance()->getItemData(aTrackId, getId(), mBuffer, mBufferSize, false);
+            if (HEIF::ErrorCode::OK != error)
+            {
+                // Could not get the data. fail.
+                mBufferSize = 0;
+                delete[] mBuffer;
+                mBuffer = nullptr;
+            }
+            else
+            {
+                switch (mConfig->getMediaFormat())
+                {
+                case HEIF::MediaFormat::AVC:
+                case HEIF::MediaFormat::HEVC:
+                {
+                    error = NAL_State::convertToByteStream(mBuffer, mBufferSize) ? HEIF::ErrorCode::OK
+                                                                                 : HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+                    break;
+                }
+                default:
+                {
+                    break;
+                }
+                }
+            }
+        }
+        else
+        {
+            HEIF_ASSERT(false);
+        }
+    }
+    return error;
+}
+
+/** Sets the item data for the image
+ * @param [in] aData: A pointer to the data.
+ * @param [in] aLength: The amount of data. */
+void Sample::setItemData(const std::uint8_t* aData, std::uint64_t aLength)
+{
+    mBufferSize = aLength;
+    delete[] mBuffer;
+    mBuffer = nullptr;
+    mBuffer = new std::uint8_t[aLength];
+    std::memcpy(mBuffer, aData, mBufferSize);
+}
+
+/** Returns the size of the sample data */
+std::uint64_t Sample::getSampleDataSize() const
+{
+    return mBufferSize;
+}
+
+/** Returns a pointer to the sample data */
+const std::uint8_t* Sample::getSampleData()
+{
+    if (mBuffer == nullptr)
+    {
+        loadSampleData(mTrack->getId());
+    }
+    return mBuffer;
+}
+
+
+DecoderConfig* Sample::getDecoderConfiguration()
+{
+    return mConfig;
+}
+
+const DecoderConfig* Sample::getDecoderConfiguration() const
+{
+    return mConfig;
+}
+HEIF::ErrorCode Sample::setDecoderConfiguration(DecoderConfig* aConfig)
+{
+    if (mConfig)
+    {
+        mConfig->unlink(this);
+    }
+    if (aConfig)
+    {
+        if (aConfig->getMediaType() != mType)
+        {
+            return HEIF::ErrorCode::DECODER_CONFIGURATION_ERROR;
+        }
+    }
+    mConfig = aConfig;
+    if (mConfig)
+    {
+        mConfig->link(this);
+    }
+    return HEIF::ErrorCode::OK;
+}
+
+HEIF::ErrorCode Sample::load(HEIF::Reader* aReader,
+                             const HEIF::SequenceId& aTrackId,
+                             const HEIF::SampleInformation& aInfo)
+{
+    HEIF::ErrorCode error = HEIF::ErrorCode::OK;
+    aReader->getDecoderCodeType(aTrackId, aInfo.sampleId, mType);
+    DecoderConfig* config = mHeif->constructDecoderConfig(aReader, Heif::InvalidItem, aTrackId, aInfo.sampleId, error);
+    if (error != HEIF::ErrorCode::OK || (setDecoderConfiguration(config) != HEIF::ErrorCode::OK))
+    {
+        return error;
+    }
+    mDuration   = aInfo.sampleDurationTS;
+    mSampleType = aInfo.sampleType;
+    HEIF::Array<std::int64_t> st;
+    aReader->getTimestampsOfItem(aTrackId, aInfo.sampleId, st);
+    mTimeStamps.reserve(st.size);
+    for (auto t : st)
+    {
+        mTimeStamps.push_back(static_cast<std::uint64_t>(t));
+    }
+    mCompositionOffset = aInfo.sampleCompositionOffsetTs;
+
+    mBufferSize = aInfo.size;
+    if (getHeif()->mPreLoadMode == Heif::PreloadMode::LOAD_ALL_DATA)
+    {
+        error = loadSampleData(aTrackId);
+    }
+    return error;
+}
+
+HEIF::ErrorCode Sample::save(HEIF::Writer* aWriter)
+{
+    HEIF::ErrorCode err = HEIF::ErrorCode::OK;
+    HEIF::MediaDataId mediaDataId;
+    HEIF::SampleInfo sampleInfo;
+    std::uint8_t* aData = nullptr;
+    std::uint64_t aSize = 0;
+    HEIF::Data data;
+
+    data.mediaFormat = mConfig->getMediaFormat();
+    switch (data.mediaFormat)
+    {
+    case HEIF::MediaFormat::AVC:
+    case HEIF::MediaFormat::HEVC:
+    {
+        err = NAL_State::convertFromByteStream(mBuffer, mBufferSize, aData, aSize)
+                  ? HEIF::ErrorCode::OK
+                  : HEIF::ErrorCode::MEDIA_PARSING_ERROR;
+        data.data = aData;
+        data.size = mBufferSize;
+        break;
+    }
+    default:
+    {
+        data.data = mBuffer;
+        data.size = mBufferSize;
+        break;
+    }
+    }
+    if (HEIF::ErrorCode::OK != err)
+    {
+        return err;
+    }
+    if (mConfig)
+    {
+        if (mConfig->getId() == Heif::InvalidDecoderConfig)
+        {
+            err = mConfig->save(aWriter);
+            if (HEIF::ErrorCode::OK != err)
+            {
+                return err;
+            }
+        }
+        data.decoderConfigId = mConfig->getId();
+    }
+    else
+    {
+        return HEIF::ErrorCode::INVALID_DECODER_CONFIG_ID;
+    }
+
+    sampleInfo.duration          = mDuration;  ///< duration of sample in ImageSequence timeBase units.
+    sampleInfo.compositionOffset = mCompositionOffset;
+    sampleInfo.isSyncSample      = (mSampleType == HEIF::OUTPUT_REFERENCE_FRAME) ||
+                              (mSampleType == HEIF::NON_OUTPUT_REFERENCE_FRAME);  ///< whether sample is sync sample
+    if (!mDecodeDependency.empty())
+    {
+        sampleInfo.referenceSamples = HEIF::Array<HEIF::SequenceImageId>(
+            mDecodeDependency.size());  ///< list of samples that this sample has direct decode dependency on.
+        sampleInfo.referenceSamples.size = 0;
+        for (auto ref : mDecodeDependency)
+        {
+            if (ref->getId() == Heif::InvalidSequenceImage)
+            {
+                // samples should always refer to previous samples.
+                // so it is not possible to have a reference to a sample not written yet.
+                return HEIF::ErrorCode::INVALID_SEQUENCE_IMAGE_ID;
+            }
+            sampleInfo.referenceSamples[sampleInfo.referenceSamples.size] = ref->getId();
+            sampleInfo.referenceSamples.size++;
+        }
+    }
+
+
+    err = aWriter->feedMediaData(data, mediaDataId);
+
+    // free temp buffer
+    delete[] aData;
+
+    if (HEIF::ErrorCode::OK != err)
+    {
+        return err;
+    }
+
+    if (mTrack->mFeatures & HEIF::TrackFeatureEnum::IsAudioTrack)
+    {
+        err = aWriter->addAudio(mTrack->getId(), mediaDataId, sampleInfo, mId);
+    }
+    else if (mTrack->mFeatures & HEIF::TrackFeatureEnum::IsVideoTrack)
+    {
+        err = aWriter->addVideo(mTrack->getId(), mediaDataId, sampleInfo, mId);
+    }
+    else
+    {
+        err = aWriter->addImage(mTrack->getId(), mediaDataId, sampleInfo, mId);
+    }
+
+    if (HEIF::ErrorCode::OK != err)
+    {
+        return err;
+    }
+
+    // add meta item links here.
+    if (!mMetaItems.empty())
+    {
+        for (auto meta : mMetaItems)
+        {
+            err = aWriter->addMetadataItemReference(HEIF::MetadataItemId(meta->getId().get()), mTrack->getId(), mId);
+            if (HEIF::ErrorCode::OK != err)
+            {
+                return err;
+            }
+        }
+    }
+
+    return err;
+}
+
+Heif* Sample::getHeif()
+{
+    return mHeif;
+}
+const Heif* Sample::getHeif() const
+{
+    return mHeif;
+}
+
+Track* Sample::getTrack()
+{
+    return mTrack;
+}
+const Track* Sample::getTrack() const
+{
+    return mTrack;
+}
+
+void Sample::addToGroup(EntityGroup* aGroup)
+{
+    AddItemTo(mGroups, aGroup);
+}
+void Sample::removeFromGroup(EntityGroup* aGroup)
+{
+    RemoveItemFrom(mGroups, aGroup);
+}
+std::uint32_t Sample::getGroupCount() const
+{
+    return static_cast<std::uint32_t>(mGroups.size());
+}
+EntityGroup* Sample::getGroup(uint32_t aId)
+{
+    if (aId < mGroups.size())
+    {
+        return mGroups[aId];
+    }
+    return nullptr;
+}
+std::uint32_t Sample::getGroupByTypeCount(const HEIF::FourCC& aType)
+{
+    std::uint32_t cnt = 0;
+    for (auto grp : mGroups)
+    {
+        if (grp->getType() == aType)
+        {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+EntityGroup* Sample::getGroupByType(const HEIF::FourCC& aType, std::uint32_t aId)
+{
+    std::uint32_t cnt = 0;
+    for (auto grp : mGroups)
+    {
+        if (grp->getType() == aType)
+        {
+            if (aId == cnt)
+            {
+                return grp;
+            }
+            cnt++;
+        }
+    }
+    return nullptr;
+}
+EntityGroup* Sample::getGroupById(const HEIF::GroupId& aId)
+{
+    for (auto grp : mGroups)
+    {
+        if (grp->getId() == aId)
+        {
+            return grp;
+        }
+    }
+    return nullptr;
+}
+\n[end of srcs/api-cpp/Sample.cpp]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.

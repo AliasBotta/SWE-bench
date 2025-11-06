@@ -1,0 +1,925 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+A heap-buffer-overflow in box_code_adobe.c:168
+
+## System info
+
+Ubuntu x86_64, gcc (Ubuntu 5.5.0-12ubuntu1), MP4Box (latest master [2aa266](https://github.com/gpac/gpac/commit/2aa266dfaab6aaad9f9f4f216ad7d1e62adc7fa0))
+
+## Configure
+
+CFLAGS="-g -fsanitize=address" LDFLAGS="-fsanitize=address" ./configure --static-mp4box
+
+## Command line
+
+./bin/gcc/MP4Box -diso -out /dev/null @@
+
+## AddressSanitizer output
+
+```
+=================================================================
+==3848==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60200000e119 at pc 0x7f931a0c33d5 bp 0x7fff7e91fcd0 sp 0x7fff7e91f478
+READ of size 10 at 0x60200000e119 thread T0
+    #0 0x7f931a0c33d4 in strdup (/usr/lib/x86_64-linux-gnu/libasan.so.2+0x623d4)
+    #1 0x563de374e827 in abst_box_read isomedia/box_code_adobe.c:168
+    #2 0x563de353db64 in gf_isom_box_read isomedia/box_funcs.c:1681
+    #3 0x563de353db64 in gf_isom_box_parse_ex isomedia/box_funcs.c:259
+    #4 0x563de353f041 in gf_isom_parse_root_box isomedia/box_funcs.c:38
+    #5 0x563de35766f5 in gf_isom_parse_movie_boxes isomedia/isom_intern.c:259
+    #6 0x563de3581951 in gf_isom_parse_movie_boxes isomedia/isom_intern.c:247
+    #7 0x563de3581951 in gf_isom_open_file isomedia/isom_intern.c:740
+    #8 0x563de2eab7e3 in mp4boxMain /home/seviezhou/gpac/applications/mp4box/main.c:5331
+    #9 0x7f931908db96 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x21b96)
+    #10 0x563de2e7cf09 in _start (/home/seviezhou/gpac/bin/gcc/MP4Box+0x27ff09)
+
+0x60200000e119 is located 0 bytes to the right of 9-byte region [0x60200000e110,0x60200000e119)
+allocated by thread T0 here:
+    #0 0x7f931a0f9612 in malloc (/usr/lib/x86_64-linux-gnu/libasan.so.2+0x98612)
+    #1 0x563de374c3a9 in abst_box_read isomedia/box_code_adobe.c:97
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow ??:0 strdup
+Shadow bytes around the buggy address:
+  0x0c047fff9bd0: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff9be0: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff9bf0: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff9c00: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x0c047fff9c10: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+=>0x0c047fff9c20: fa fa 00[01]fa fa 00 00 fa fa 00 00 fa fa 00 00
+  0x0c047fff9c30: fa fa 00 00 fa fa 00 00 fa fa fd fa fa fa 00 fa
+  0x0c047fff9c40: fa fa 00 00 fa fa 00 00 fa fa 00 07 fa fa fd fa
+  0x0c047fff9c50: fa fa 00 02 fa fa 04 fa fa fa fd fa fa fa 07 fa
+  0x0c047fff9c60: fa fa fd fa fa fa 05 fa fa fa fd fa fa fa 00 fa
+  0x0c047fff9c70: fa fa fd fa fa fa 07 fa fa fa fd fa fa fa 07 fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07
+  Heap left redzone:       fa
+  Heap right redzone:      fb
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack partial redzone:   f4
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+==3848==ABORTING
+```
+
+## POC
+
+[heap-overflow-abst_box_read-box_code_adobe-168.zip](https://github.com/gpac/gpac/files/5048763/heap-overflow-abst_box_read-box_code_adobe-168.zip)
+</issue>
+
+<code>
+[start of Makefile]\nMakefile
+#
+# Main gpac Makefile
+#
+include config.mak
+
+ifndef SRC_PATH
+override SRC_PATH = .
+endif
+
+vpath %.c $(SRC_PATH)
+
+all:	version
+	$(MAKE) -C src all
+	$(MAKE) -C applications all
+ifneq ($(MP4BOX_STATIC),yes)
+	$(MAKE) -C modules all
+endif
+
+
+config.mak:
+	./configure
+
+
+GITREV_PATH:=$(SRC_PATH)/include/gpac/revision.h
+TAG:=$(shell git --git-dir=$(SRC_PATH)/.git describe --tags --abbrev=0 2> /dev/null)
+VERSION:=$(shell echo `git --git-dir=$(SRC_PATH)/.git describe --tags --long  || echo "UNKNOWN"` | sed "s/^$(TAG)-//")
+BRANCH:=$(shell git --git-dir=$(SRC_PATH)/.git rev-parse --abbrev-ref HEAD 2> /dev/null || echo "UNKNOWN")
+
+version:
+	@if [ -d $(SRC_PATH)/".git" ]; then \
+		echo "#define GPAC_GIT_REVISION	\"$(VERSION)-$(BRANCH)\"" > $(GITREV_PATH).new; \
+		if ! diff -q $(GITREV_PATH) $(GITREV_PATH).new >/dev/null ; then \
+			mv $(GITREV_PATH).new  $(GITREV_PATH); \
+		fi; \
+	else \
+		echo "No GIT Version found" ; \
+	fi
+
+lib:	version
+	$(MAKE) -C src all
+
+apps:
+	$(MAKE) -C applications all
+
+sggen:
+	$(MAKE) -C applications sggen
+
+mods:
+	$(MAKE) -C modules all
+
+instmoz:
+	$(MAKE) -C applications/osmozilla install
+
+depend:
+	$(MAKE) -C src dep
+	$(MAKE) -C applications dep
+	$(MAKE) -C modules dep
+
+clean:
+	$(MAKE) -C src clean
+	$(MAKE) -C applications clean
+	$(MAKE) -C modules clean
+
+distclean:
+	$(MAKE) -C src distclean
+	$(MAKE) -C applications distclean
+	$(MAKE) -C modules distclean
+	rm -f config.mak config.h config.log
+	@find . -type f -name '*.gcno*' -delete
+	@find . -type f -name '*.gcda*' -delete
+	@rm -f coverage.info 2> /dev/null
+	@rm -f bin/gcc/gm_*$(DYN_LIB_SUFFIX) 2> /dev/null
+	@rm -f bin/gcc/gf_*$(DYN_LIB_SUFFIX) 2> /dev/null
+
+doc:
+	@cd $(SRC_PATH)/share/doc && doxygen
+
+man:
+	@cd $(SRC_PATH)/share/doc/man && MP4Box -genman && MP4Client -genman && gpac -genman
+
+test_suite:
+	@cd $(SRC_PATH)/testsuite && ./make_tests.sh -precommit -p=0
+
+lcov_clean:
+	lcov --directory . --zerocounters
+
+lcov_only:
+	@echo "Generating lcov info in coverage.info"
+	@rm -f ./gpac-conf-* > /dev/null
+	@lcov -q -capture --directory . --output-file all.info
+	@lcov --remove all.info '*/usr/*' '*/opt/*' '*/include/*' '*/validator/*' '*/quickjs/*' '*/jsmods/WebGLRenderingContextBase*' '*/utils/Remotery*' '*/utils/gzio*'  --output coverage.info
+	@rm all.info
+	@echo "Purging lcov info"
+	@cd src ; for dir in * ; do cd .. ; sed -i -- "s/$$dir\/$$dir\//$$dir\//g" coverage.info; cd src; done ; cd ..
+	@echo "Done - coverage.info ready"
+
+lcov:	lcov_only
+	@rm -rf coverage/
+	@genhtml -q -o coverage coverage.info
+
+travis_tests:
+	@echo "Running tests in $(SRC_PATH)/testsuite"
+	@cd $(SRC_PATH)/testsuite && ./make_tests.sh -precommit -p=0
+
+travis_deploy:
+	@echo "Deploying results"
+	@cd $(SRC_PATH)/testsuite && ./ghp_deploy.sh
+
+travis: travis_tests lcov travis_deploy
+
+dep:	depend
+
+install:
+	$(INSTALL) -d "$(DESTDIR)$(prefix)"
+
+	$(MAKE) install-lib
+
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/bin"
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/gpac$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin"
+ifeq ($(DISABLE_ISOFF), no)
+	if [ -f bin/gcc/MP4Box$(EXE_SUFFIX) ] ; then \
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/MP4Box$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin" ; \
+	fi
+endif
+ifneq ($(MP4BOX_STATIC), yes)
+ifeq ($(DISABLE_PLAYER), no)
+	if [ -f bin/gcc/MP4Client$(EXE_SUFFIX) ] ; then \
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/MP4Client$(EXE_SUFFIX) "$(DESTDIR)$(prefix)/bin" ; \
+	fi
+endif
+endif
+	$(INSTALL) -d "$(DESTDIR)$(moddir)"
+ifneq ($(MP4BOX_STATIC),yes)
+	$(INSTALL) bin/gcc/gm_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(moddir)" || true
+	$(INSTALL) bin/gcc/gf_*$(DYN_LIB_SUFFIX) "$(DESTDIR)$(moddir)" || true
+ifeq ($(CONFIG_OPENHEVC),yes)
+	cp -a bin/gcc/libopenhevc* $(DESTDIR)$(prefix)/$(libdir)/ || true
+endif
+
+endif
+	$(INSTALL) -d "$(DESTDIR)$(mandir)"
+	$(INSTALL) -d "$(DESTDIR)$(mandir)/man1"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4box.1 $(DESTDIR)$(mandir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/mp4client.1 $(DESTDIR)$(mandir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac.1 $(DESTDIR)$(mandir)/man1/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/doc/man/gpac-filters.1 $(DESTDIR)$(mandir)/man1/
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/res"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/gui"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/gui/icons"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/gui/extensions"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/shaders"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/gpac/scripts"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.mp4 $(DESTDIR)$(prefix)/share/gpac/res/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac_cfg_test.mp4 $(DESTDIR)$(prefix)/share/gpac/res/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.png $(DESTDIR)$(prefix)/share/gpac/res/
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/default.cfg $(DESTDIR)$(prefix)/share/gpac/
+
+ifneq ($(CONFIG_DARWIN),yes)
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/pixmaps"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/share/applications"
+
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/res/gpac.png "$(DESTDIR)$(prefix)/share/pixmaps/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gpac.desktop "$(DESTDIR)$(prefix)/share/applications/"
+endif
+
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gui.bt "$(DESTDIR)$(prefix)/share/gpac/gui/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gui.js "$(DESTDIR)$(prefix)/share/gpac/gui/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/gui/gwlib.js "$(DESTDIR)$(prefix)/share/gpac/gui/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/scripts/webvtt-renderer.js "$(DESTDIR)$(prefix)/share/gpac/scripts/"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/share/scripts/ttml-renderer.js "$(DESTDIR)$(prefix)/share/gpac/scripts/"
+
+
+ifeq ($(CONFIG_DARWIN),yes)
+	cp $(SRC_PATH)/share/gui/icons/* "$(DESTDIR)$(prefix)/share/gpac/gui/icons/"
+	cp -R $(SRC_PATH)/share/gui/extensions/* "$(DESTDIR)$(prefix)/share/gpac/gui/extensions/"
+	cp $(SRC_PATH)/share/shaders/* "$(DESTDIR)$(prefix)/share/gpac/shaders/"
+else
+	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/icons/* $(DESTDIR)$(prefix)/share/gpac/gui/icons/
+	cp -R --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/gui/extensions/* $(DESTDIR)$(prefix)/share/gpac/gui/extensions/
+	cp --no-preserve=mode,ownership,timestamp $(SRC_PATH)/share/shaders/* $(DESTDIR)$(prefix)/share/gpac/shaders/
+endif
+
+lninstall:
+	$(INSTALL) -d "$(DESTDIR)$(prefix)"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/bin"
+	ln -sf $(BUILD_PATH)/bin/gcc/gpac$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/gpac$(EXE_SUFFIX)
+ifeq ($(DISABLE_ISOFF), no)
+	ln -sf $(BUILD_PATH)/bin/gcc/MP4Box$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/MP4Box$(EXE_SUFFIX)
+endif
+ifneq ($(MP4BOX_STATIC),yes)
+ifeq ($(DISABLE_PLAYER), no)
+	ln -sf $(BUILD_PATH)/bin/gcc/MP4Client$(EXE_SUFFIX) $(DESTDIR)$(prefix)/bin/MP4Client$(EXE_SUFFIX)
+endif
+endif
+ifeq ($(CONFIG_DARWIN),yes)
+	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
+	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
+	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX)
+else
+	ln -s $(BUILD_PATH)/bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
+	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so.$(VERSION_MAJOR)
+	ln -sf $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so
+
+	ln -s $(SRC_PATH)/share/ $(DESTDIR)$(prefix)/share/gpac
+	ln -sf $(DESTDIR)$(prefix)/share/gpac/res/gpac.png $(DESTDIR)/usr/share/pixmaps/gpac.png
+	ln -sf $(SRC_PATH)/share/gpac.desktop $(DESTDIR)/usr/share/applications/
+
+ifeq ($(DESTDIR)$(prefix),$(prefix))
+	ldconfig || true
+endif
+
+endif
+
+uninstall:
+	$(MAKE) -C applications uninstall
+	$(MAKE) uninstall-lib
+	rm -rf $(DESTDIR)$(moddir)
+	rm -rf $(DESTDIR)$(prefix)/bin/MP4Box
+	rm -rf $(DESTDIR)$(prefix)/bin/MP4Client
+	rm -rf $(DESTDIR)$(prefix)/bin/gpac
+	rm -rf $(DESTDIR)$(mandir)/man1/mp4box.1
+	rm -rf $(DESTDIR)$(mandir)/man1/mp4client.1
+	rm -rf $(DESTDIR)$(mandir)/man1/gpac.1
+	rm -rf $(DESTDIR)$(mandir)/man1/gpac-filters.1
+	rm -rf $(DESTDIR)$(prefix)/share/gpac
+	rm -rf $(DESTDIR)$(prefix)/share/pixmaps/gpac.png
+	rm -rf $(DESTDIR)$(prefix)/share/applications/gpac.desktop
+
+
+installdylib:
+ifneq ($(MP4BOX_STATIC),yes)
+
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
+
+ifeq ($(CONFIG_WIN32),yes)
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac.dll.a $(DESTDIR)$(prefix)/$(libdir)
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac.dll $(DESTDIR)$(prefix)/bin
+else
+
+ifeq ($(DEBUGBUILD),no)
+	$(STRIP) -S bin/gcc/libgpac$(DYN_LIB_SUFFIX)
+endif
+
+ifeq ($(CONFIG_DARWIN),yes)
+	$(INSTALL) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX)
+	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac.$(VERSION_MAJOR)$(DYN_LIB_SUFFIX)
+	ln -sf libgpac.$(VERSION_SONAME)$(DYN_LIB_SUFFIX) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX)
+else
+	$(INSTALL) $(INSTFLAGS) -m 755 bin/gcc/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME)
+	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so.$(VERSION_MAJOR)
+	ln -sf libgpac$(DYN_LIB_SUFFIX).$(VERSION_SONAME) $(DESTDIR)$(prefix)/$(libdir)/libgpac.so
+ifeq ($(DESTDIR)$(prefix),$(prefix))
+	ldconfig || true
+endif
+endif
+
+endif
+
+endif
+
+
+uninstalldylib:
+	rm -rf $(DESTDIR)$(prefix)/$(libdir)/libgpac*
+ifeq ($(CONFIG_WIN32),yes)
+	rm -rf "$(DESTDIR)$(prefix)/bin/libgpac*"
+endif
+
+install-lib:
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/include/gpac"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/include/gpac/internal"
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/include/gpac/modules"
+
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/include/gpac/*.h "$(DESTDIR)$(prefix)/include/gpac"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/include/gpac/internal/*.h "$(DESTDIR)$(prefix)/include/gpac/internal"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/include/gpac/modules/*.h "$(DESTDIR)$(prefix)/include/gpac/modules"
+
+	$(INSTALL) $(INSTFLAGS) -m 644 config.h "$(DESTDIR)$(prefix)/include/gpac/configuration.h" || true
+
+ifeq ($(GPAC_ENST), yes)
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/include/gpac/enst"
+	$(INSTALL) $(INSTFLAGS) -m 644 $(SRC_PATH)/include/gpac/enst/*.h "$(DESTDIR)$(prefix)/include/gpac/enst"
+endif
+
+	$(INSTALL) -d "$(DESTDIR)$(prefix)/$(libdir)"
+	$(INSTALL) $(INSTFLAGS) -m 644 "./bin/gcc/libgpac_static.a" "$(DESTDIR)$(prefix)/$(libdir)" || true
+
+	$(INSTALL) -d $(DESTDIR)$(prefix)/$(libdir)/pkgconfig
+	$(INSTALL) $(INSTFLAGS) -m 644 gpac.pc "$(DESTDIR)$(prefix)/$(libdir)/pkgconfig"
+
+	$(MAKE) installdylib
+
+
+uninstall-lib:
+	rm -rf "$(DESTDIR)$(prefix)/include/gpac/internal"
+	rm -rf "$(DESTDIR)$(prefix)/include/gpac/modules"
+	rm -rf "$(DESTDIR)$(prefix)/include/gpac/enst"
+	rm -rf "$(DESTDIR)$(prefix)/include/gpac"
+	rm -f  "$(DESTDIR)$(prefix)/$(libdir)/libgpac_static.a"
+	rm -f  "$(DESTDIR)$(prefix)/$(libdir)/pkgconfig/gpac.pc"
+	$(MAKE) uninstalldylib
+
+ifeq ($(CONFIG_DARWIN),yes)
+dmg:
+#	@if [ ! -z "$(shell git diff FETCH_HEAD)" ]; then \
+#		echo "Local revision and remote revision are not congruent; you may have local commit."; \
+#		echo "Please consider pushing your commit before generating an installer"; \
+#		exit 1; \
+#	fi
+	rm "bin/gcc/MP4Client"
+	$(MAKE) -C applications/mp4client
+	./mkdmg.sh $(arch)
+endif
+
+ifeq ($(CONFIG_LINUX),yes)
+deb:
+	git checkout --	debian/changelog
+	fakeroot debian/rules clean
+	# add version to changelog for final filename
+	sed -i -r "s/^(\w+) \(([0-9\.]+)(-[A-Z]+)?\)/\1 (\2\3-rev$(VERSION)-$(BRANCH))/" debian/changelog
+	fakeroot debian/rules configure
+	fakeroot debian/rules binary
+	rm -rf debian/
+	git checkout debian
+endif
+
+help:
+	@echo "Input to GPAC make:"
+	@echo "depend/dep: builds dependencies (dev only)"
+	@echo "all (void): builds main library, programs and plugins"
+	@echo "lib: builds GPAC library only (libgpac.so)"
+	@echo "apps: builds programs only"
+	@echo "modules: builds modules only"
+	@echo "instmoz: build and local install of osmozilla"
+	@echo "sggen: builds scene graph generators"
+	@echo
+	@echo "clean: clean src repository"
+	@echo "distclean: clean src repository and host config file"
+	@echo
+	@echo "install: install applications and modules on system"
+	@echo "uninstall: uninstall applications and modules"
+ifeq ($(CONFIG_DARWIN),yes)
+	@echo "dmg: creates DMG package file for OSX"
+endif
+ifeq ($(CONFIG_LINUX),yes)
+	@echo "deb: creates DEB package file for debian based systems"
+endif
+	@echo
+	@echo "install-lib: install gpac library (dyn and static) and headers <gpac/*.h>, <gpac/modules/*.h> and <gpac/internal/*.h>"
+	@echo "uninstall-lib: uninstall gpac library (dyn and static) and headers"
+	@echo
+	@echo "test_suite: run all tests. For more info, check https://github.com/gpac/testsuite"
+	@echo
+	@echo "doc:  build libgpac documentation in gpac/doc"
+	@echo "man:  build gpac man files in gpac/doc/man (must have latest build binaries installed)"
+	@echo
+	@echo "lcov: generate lcov files"
+	@echo "lcov_clean: clean all lcov/gcov files"
+
+
+-include .depend
+\n[end of Makefile]\n[start of generate_installer.bat]\ngenerate_installer.bat
+@echo off
+set OLDDIR=%CD%
+cd /d %~dp0
+REM ============================================
+echo *** Generating a Windows GPAC installer ***
+REM ============================================
+
+
+:begin
+IF "%1"=="win32" GOTO next
+IF "%1"=="x64" GOTO next
+echo You must specified target architecture : win32 or x64
+GOTO Abort
+
+:next
+echo:
+REM ============================================
+echo Check NSIS is in your PATH
+REM ============================================
+
+
+if "%PROCESSOR_ARCHITECTURE%" == "AMD64" (
+    setlocal enabledelayedexpansion
+    SET PRGROOT=!programfiles(x86^)!
+    setlocal disabledelayedexpansion
+)
+if "%PROCESSOR_ARCHITECTURE%" == "x86" (
+    setlocal enabledelayedexpansion
+    SET PRGROOT=!programfiles!
+    setlocal disabledelayedexpansion
+)
+
+set NSIS_EXEC="%PRGROOT%\NSIS\makensis.exe"
+if not exist "%PRGROOT%\NSIS\makensis.exe" echo   NSIS couldn't be found at default location %NSIS_EXEC%
+if not exist "%PRGROOT%\NSIS\makensis.exe" goto Abort
+echo   Found NSIS at default location %NSIS_EXEC%
+
+
+echo:
+REM ============================================
+echo Retrieving version/revision information
+REM ============================================
+if not exist include/gpac/revision.h echo   version couldn't be found - check include/gpac/revision.h exists
+if not exist include/gpac/revision.h goto Abort
+
+REM check if found a local commit which has not been pushed
+for /f "delims=" %%a in ('git diff FETCH_HEAD') do @set diff=%%a
+echo diff = %diff%
+if not "%diff%"=="" echo Local and remote revisions not in sync, consider pushing or pulling changes
+
+REM execute git and check if the result if found within revision.h
+for /f "delims=" %%a in ('git describe --tags --long') do @set VERSION=%%a
+for /f "delims=" %%a in ('git describe --tags --abbrev^=0') do @set TAG=%%a-
+for /f "delims=" %%a in ('git rev-parse --abbrev-ref HEAD') do @set BRANCH=%%a
+REM remove anotated tag from VERSION
+setlocal enabledelayedexpansion
+call set VERSION=%%VERSION:!TAG!=%%
+setlocal disabledelayedexpansion
+SET VarRevisionGIT=%VERSION%-%BRANCH%
+for /f "delims=" %%i in ('type include\gpac\revision.h ^| findstr /i /r "%VarRevisionGIT%"') do Set VarRevisionBuild=%%i
+echo VarRevisionBuild = %VarRevisionBuild%
+echo VarRevisionGIT  = %VarRevisionGIT%
+if !"%VarRevisionBuild%"==!"%VarRevisionGIT%" echo   local revision and last build revision are not congruent - please consider rebuilding before generating an installer
+if !"%VarRevisionBuild%"==!"%VarRevisionGIT%" goto Abort
+
+move packagers\win32_64\nsis\default.out packagers\win32_64\nsis\default.out_
+echo Name "GPAC Framework ${GPAC_VERSION} for %1 revision %VarRevisionGIT%" > packagers\win32_64\nsis\default.out
+echo OutFile "gpac-${GPAC_VERSION}-rev%VarRevisionGIT%-%1.exe" >> packagers\win32_64\nsis\default.out
+IF "%1"=="x64" echo !define IS_WIN64 >> packagers\win32_64\nsis\default.out
+
+echo:
+REM ============================================
+echo Executing NSIS
+REM ============================================
+call %NSIS_EXEC% packagers\win32_64\nsis\gpac_installer.nsi
+IF %ERRORLEVEL% NEQ 0 GOTO Abort
+
+
+echo:
+REM ============================================
+echo Removing temporary files
+REM ============================================
+move packagers\win32_64\nsis\default.out_ packagers\win32_64\nsis\default.out
+
+
+echo:
+REM ============================================
+echo Windows GPAC installer generated - goodbye!
+REM ============================================
+REM LeaveBatchSuccess
+set VarRevisionGIT=
+set VarRevisionBuild=
+cd /d %OLDDIR%
+exit/b 0
+
+:RevisionAbort
+echo Local revision and remote revision are not congruent; you may have local commit
+echo Please consider pushing your commit before generating an installer
+
+:Abort
+echo:
+echo  *** ABORTING: CHECK ERROR MESSAGES ABOVE ***
+
+REM LeaveBatchError
+set VarRevisionBuild=
+cd /d %OLDDIR%
+exit/b 1
+\n[end of generate_installer.bat]\n[start of run_configure.sh]\nrun_configure.sh
+#!/bin/bash
+#
+# calls ./configure and prints out build dependency for platform
+#
+# Shell-script based on code suplied in [1]
+#     [1] Guide du nouveau responsable Debian. Copyright © 1998-2002 Josip Rodin
+
+strace -f -o /tmp/log ./configure
+echo ""
+echo ""
+echo "GPAC Build dependency for your platform"
+       for x in `dpkg -S $(grep open /tmp/log|\
+                           perl -pe 's!.* open\(\"([^\"]*).*!$1!' |\
+                           grep "^/"| sort | uniq|\
+                           grep -v "^\(/tmp\|/dev\|/proc\)" ) 2>/dev/null|\
+                           cut -f1 -d":"| sort | uniq`; \
+             do \
+               echo -n "$x (>=" `dpkg -s $x|grep ^Version|cut -f2 -d":"` "), "; \
+             done
+echo ""
+echo ""
+\n[end of run_configure.sh]\n[start of version.bat]\nversion.bat
+@echo off
+set OLDDIR=%CD%
+cd /d %~dp0
+
+IF NOT EXIST .\.git\NUL GOTO not_git
+
+for /f "delims=" %%a in ('git describe --tags --long') do @set VERSION=%%a
+for /f "delims=" %%a in ('git describe --tags --abbrev^=0') do @set TAG=%%a-
+for /f "delims=" %%a in ('git rev-parse --abbrev-ref HEAD') do @set BRANCH=%%a
+REM remove anotated tag from VERSION
+setlocal enabledelayedexpansion
+call set VERSION=%%VERSION:!TAG!=%%
+setlocal disabledelayedexpansion
+echo #define GPAC_GIT_REVISION "%VERSION%-%BRANCH%" > test.h
+
+:write_file
+if not exist include\gpac\revision.h goto create
+ECHO n|COMP test.h include\gpac\revision.h > nul
+if errorlevel 1 goto create
+DEL test.h
+goto done
+
+:create
+MOVE /Y test.h include\gpac\revision.h
+goto done
+
+:not_git
+echo "not a git dir"
+find /c "-DEV" include\gpac\version.h >nul 
+if %errorlevel% equ 1 goto rel_tag
+echo "unknwon tag"
+@echo off
+echo #define GPAC_GIT_REVISION "UNKNOWN_REV" > test.h
+goto write_file
+
+:rel_tag
+echo "release tag"
+@echo off
+echo #define GPAC_GIT_REVISION "release" > test.h
+goto write_file
+
+
+:done
+cd /d %OLDDIR%
+exit/b
+
+\n[end of version.bat]\n[start of static.mak]\nstatic.mak
+
+NEED_LOCAL_LIB="no"
+LINKLIBS=
+
+ifeq ($(DISABLE_CORE_TOOLS), no)
+
+#1 - zlib support
+ifeq ($(CONFIG_ZLIB), local)
+CFLAGS+= -I"$(LOCAL_INC_PATH)/zlib"
+NEED_LOCAL_LIB="yes"
+endif
+ifneq ($(CONFIG_ZLIB), no)
+LINKLIBS+=-lz
+endif
+
+#2 - ssl support
+ifeq ($(HAS_OPENSSL), yes)
+LINKLIBS+=$(SSL_LIBS)
+endif
+
+#3 - spidermonkey support
+ifeq ($(CONFIG_JS),no)
+else
+SCENEGRAPH_CFLAGS+=$(JS_FLAGS)
+ifeq ($(CONFIG_JS),local)
+NEED_LOCAL_LIB="yes"
+endif
+LINKLIBS+=$(JS_LIBS)
+endif
+
+endif
+
+#4 - JPEG support
+ifeq ($(CONFIG_JPEG), no)
+else
+LINKLIBS+= -ljpeg
+#local lib
+ifeq ($(CONFIG_JPEG), local)
+NEED_LOCAL_LIB="yes"
+MEDIATOOLS_CFLAGS+=-I"$(LOCAL_INC_PATH)/jpeg"
+FILTERS_CFLAGS+=-I"$(LOCAL_INC_PATH)/jpeg"
+endif
+endif
+
+
+#5 - PNG support
+ifeq ($(CONFIG_PNG), no)
+else
+LINKLIBS+= -lpng
+ifeq ($(CONFIG_PNG), local)
+NEED_LOCAL_LIB="yes"
+MEDIATOOLS_CFLAGS+=-I"$(LOCAL_INC_PATH)/png"
+FILTERS_CFLAGS+=-I"$(LOCAL_INC_PATH)/png"
+endif
+endif
+
+
+## libgpac compositor compilation options
+COMPOSITOR_CFLAGS=
+
+## Add prefix before every lib
+ifneq ($(prefix), /usr/local)
+ifneq ($(prefix), /usr)
+EXTRALIBS+=-L$(prefix)/lib
+endif
+endif
+
+## OpenGL available
+ifeq ($(HAS_OPENGL),yes)
+EXTRALIBS+= $(OGL_LIBS)
+COMPOSITOR_CFLAGS+=$(OGL_INCLS)
+endif
+
+ifeq ($(NEED_LOCAL_LIB), "yes")
+EXTRALIBS+=-L../extra_lib/lib/gcc
+endif
+
+EXTRALIBS+=$(LINKLIBS)
+
+ifeq ($(GPAC_USE_TINYGL), yes)
+COMPOSITOR_CFLAGS+=-I"$(SRC_PATH)/../TinyGL/include"
+else
+COMPOSITOR_CFLAGS+=-DGPAC_HAS_GLU
+endif
+
+ifeq ($(ENABLE_JOYSTICK), yes)
+COMPOSITOR_CFLAGS+=-DENABLE_JOYSTICK
+endif
+
+
+## libgpac media tools compilation options
+ifeq ($(GPACREADONLY), yes)
+MEDIATOOLS_CFLAGS=-DGPAC_READ_ONLY
+endif
+
+
+ifeq ($(GPAC_ENST), yes)
+OBJS+=$(LIBGPAC_ENST)
+EXTRALIBS+=-liconv
+MEDIATOOLS_CFLAGS+=-DGPAC_ENST_PRIVATE
+endif
+
+
+ifeq ($(MP4BOX_STATIC),yes)
+CFLAGS+= -DGPAC_MP4BOX_MINI
+endif
+
+
+## static modules
+
+# configure static modules
+ifeq ($(STATIC_MODULES), yes)
+
+CFLAGS+= -DGPAC_STATIC_MODULES
+
+ifeq ($(CONFIG_ALSA), yes)
+OBJS+=../modules/alsa/alsa.o
+CFLAGS+=-DGPAC_HAS_ALSA
+EXTRALIBS+= -lasound
+endif
+
+OBJS+=../modules/validator/validator.o
+
+ifneq ($(CONFIG_FT), no)
+OBJS+=../modules/ft_font/ft_font.o
+EXTRALIBS+= $(FT_LIBS)
+CFLAGS+=-DGPAC_HAS_FREETYPE $(FT_CFLAGS)
+endif
+
+ifeq ($(CONFIG_SDL), yes)
+CFLAGS+=-DGPAC_HAS_SDL $(SDL_CFLAGS)
+EXTRALIBS+= $(SDL_LIBS)
+OBJS+=../modules/sdl_out/sdl_out.o ../modules/sdl_out/audio.o ../modules/sdl_out/video.o
+endif
+
+
+ifeq ($(CONFIG_X11),yes)
+OBJS+= ../modules/x11_out/x11_out.o
+CFLAGS+=-DGPAC_HAS_X11
+ifneq ($(X11_INC_PATH), )
+CFLAGS+=-I$(X11_INC_PATH)
+endif
+
+ifneq ($(X11_LIB_PATH), )
+EXTRALIBS+=-L$(X11_LIB_PATH)
+endif
+EXTRALIBS+=-lX11
+
+ifeq ($(USE_X11_XV), yes)
+CFLAGS+=-DGPAC_HAS_X11_XV
+EXTRALIBS+=-lXv
+endif
+
+ifeq ($(USE_X11_XV), yes)
+CFLAGS+=-DGPAC_HAS_X11_XV
+EXTRALIBS+=-lXv
+endif
+
+ifeq ($(USE_X11_SHM), yes)
+CFLAGS+=-DGPAC_HAS_X11_SHM
+EXTRALIBS+=-lXext
+endif
+
+ifeq ($(HAS_OPENGL), yes)
+ifeq ($(CONFIG_DARWIN),yes)
+EXTRALIBS+=-lGL -lGLU
+endif
+endif
+
+#end of x11
+endif
+
+
+ifeq ($(CONFIG_JACK), yes)
+OBJS+= ../modules/jack/jack.o
+CFLAGS+=-DGPAC_HAS_JACK
+EXTRALIBS+=-ljack
+endif
+
+ifeq ($(CONFIG_PULSEAUDIO), yes)
+OBJS+= ../modules/pulseaudio/pulseaudio.o
+CFLAGS+=-DGPAC_HAS_PULSEAUDIO
+EXTRALIBS+=-lpulse -lpulse-simple
+endif
+
+
+ifeq ($(CONFIG_DIRECTFB),yes)
+OBJS+= ../modules/directfb_out/directfb_out.o ../modules/directfb_out/directfb_wrapper.o
+CFLAGS+=-DGPAC_HAS_DIRECTFB -I$(DIRECTFB_INC_PATH)
+EXTRALIBS+=$(DIRECTFB_LIB)
+endif
+
+ifeq ($(CONFIG_WIN32),yes)
+OBJS+= ../modules/wav_out/wav_out.o
+EXTRALIBS+=-DGPAC_HAS_WAVEOUT -DDISABLE_WAVE_EX
+endif
+
+ifeq ($(CONFIG_DIRECTX),yes)
+OBJS+= ../modules/dx_hw/dx_audio.o ../modules/dx_hw/dx_video.o ../modules/dx_hw/dx_window.o ../modules/dx_hw/dx_2d.o
+CFLAGS+=-DGPAC_HAS_DIRECTX -DDIRECTSOUND_VERSION=0x0500
+ifneq ($(DX_PATH), system)
+EXTRALIBS+=-L$(DX_PATH)/lib
+CFLAGS+= -I$(DX_PATH)/include
+endif
+EXTRALIBS+=-ldsound -ldxguid -lddraw -lole32 -lgdi32 -lopengl32
+endif
+
+
+
+#end of static modules
+endif
+
+
+ifeq ($(CONFIG_DARWIN),yes)
+EXTRALIBS+=-framework CoreFoundation -framework CoreVideo -framework CoreMedia -framework VideoToolbox
+endif
+\n[end of static.mak]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.

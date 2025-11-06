@@ -1,0 +1,1305 @@
+The following text contains a user issue (in <issue/> brackets) posted at a repository.
+Further, you are provided with file contents of several files in the repository that
+contain relevant code (in <code> brackets). It may be necessary to use code from
+third party dependencies or files not contained in the attached documents however.
+Your task is to identify the issue and implement a test case that verifies a
+proposed solution to this issue. More details at the end of this text.
+
+<issue>
+Alloc dealloc mismatch
+
+## System info
+
+Ubuntu X64, gcc (Ubuntu 5.5.0-12ubuntu1), libxsmm_gemm_generator (latest master [ea905d0](https://github.com/hfp/libxsmm/commit/ea905d08037e5d7869ceab057f7a310ccb9199f3))
+
+## Command line
+
+./bin/libxsmm_gemm_generator sparse foo.c foo 16 16 16 32 0 32 1 1 1 1 hsw nopf DP @@
+
+## AddressSanitizer output
+
+```
+=================================================================
+==9028==ERROR: AddressSanitizer: alloc-dealloc-mismatch (INVALID vs free) on 0x61300000de80
+    #0 0x7fd31a8032ca in __interceptor_free (/usr/lib/x86_64-linux-gnu/libasan.so.2+0x982ca)
+    #1 0x408d74  (/home/seviezhou/libxsmm/bin/libxsmm_gemm_generator+0x408d74)
+    #2 0x402920  (/home/seviezhou/libxsmm/bin/libxsmm_gemm_generator+0x402920)
+    #3 0x7fd31a1a483f in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x2083f)
+    #4 0x4035a8  (/home/seviezhou/libxsmm/bin/libxsmm_gemm_generator+0x4035a8)
+
+0x61300000de80 is located 0 bytes inside of 340-byte region [0x61300000de80,0x61300000dfd4)
+ASAN:SIGSEGV
+==9028==AddressSanitizer: while reporting a bug found another one. Ignoring.
+```
+
+## POC
+
+[alloc-dealloc-mismatch-libxsmm_gemm_generator-408d74.zip](https://github.com/hfp/libxsmm/files/5012243/alloc-dealloc-mismatch-libxsmm_gemm_generator-408d74.zip)
+</issue>
+
+<code>
+[start of PULL_REQUEST_TEMPLATE.md]\nPULL_REQUEST_TEMPLATE.md
+
+\n[end of PULL_REQUEST_TEMPLATE.md]\n[start of SECURITY.md]\nSECURITY.md
+# Security Policy
+
+## Supported Versions
+
+LIBXSMM is distributed as source code package. In case of an issue, please report at https://github.com/hfp/libxsmm/issues. There is no formal commitment to update an existing release. Please feel free to write down such an expectation as part of the issue report!
+
+Determine accurate build information in case of an upstreamed package (binary distribution):
+
+```bash
+export LIBXSMM_DUMP_BUILD=1
+./application_linked_with_libxsmm ...
+```
+
+Build information is available when LIBXSMM was dynamically or statically linked with an application (not for header-only).
+
+## Reporting a Vulnerability
+
+Please report any kind of issue at https://github.com/hfp/libxsmm/issues or leave a reference to a report made elsewhere.
+
+\n[end of SECURITY.md]\n[start of README.md]\nREADME.md
+# LIBXSMM
+
+[![License](https://img.shields.io/badge/license-BSD3-blue.svg)](LICENSE.md) [![Travis CI](https://travis-ci.org/hfp/libxsmm.svg?branch=master "Master branch build status")](https://github.com/hfp/libxsmm/wiki/Status) [![Coverity](https://scan.coverity.com/projects/7405/badge.svg "Coverity Scan Build Status")](https://scan.coverity.com/projects/hfp-libxsmm) [![ReadtheDocs](https://readthedocs.org/projects/libxsmm/badge/?version=latest "Read the Docs")](https://libxsmm.readthedocs.io/)
+
+LIBXSMM is a library for specialized dense and sparse matrix operations as well as for deep learning primitives such as small convolutions. The library is targeting Intel Architecture with Intel&#160;SSE, Intel&#160;AVX, Intel&#160;AVX2, Intel&#160;AVX&#8209;512 (with VNNI and Bfloat16), and Intel&#160;AMX (Advanced Matrix Extensions) supported by future Intel processor code-named Sapphire Rapids. Code generation is mainly based on Just&#8209;In&#8209;Time (JIT) code specialization for compiler-independent performance (matrix multiplications, matrix transpose/copy, sparse functionality, and deep learning). LIBXSMM is suitable for "build once and deploy everywhere", i.e., no special target flags are needed to exploit the available performance. Supported GEMM datatypes are: `FP64`, `FP32`, `bfloat16`, `int16`, and `int8`.
+
+For a list questions and answers, please also have a look at [https://github.com/hfp/libxsmm/wiki/Q&A](https://github.com/hfp/libxsmm/wiki/Q&A).
+
+**Where to go for documentation?**
+
+* **ReadtheDocs**: [main](https://libxsmm.readthedocs.io/) and [sample](https://libxsmm.readthedocs.io/libxsmm_samples/) documentation with full text search.
+* **PDF**: [main](https://github.com/hfp/libxsmm/raw/master/documentation/libxsmm.pdf) documentation file, and separate [sample](https://github.com/hfp/libxsmm/raw/master/documentation/libxsmm_samples.pdf) documentation.
+* **Articles**: [magazine article](https://software.intel.com/sites/default/files/parallel-universe-issue-34.pdf) incl. [sample code](https://github.com/hfp/libxsmm/tree/master/samples/magazine) (full list of [Articles](#articles)).
+
+**<a name="what-is-a-small-matrix-multiplication"></a>What is a small matrix multiplication?** When characterizing the problem-size by using the M, N, and K parameters, a problem-size suitable for LIBXSMM falls approximately within *(M&#160;N&#160;K)<sup>1/3</sup>&#160;&lt;=&#160;64* (which illustrates that non-square matrices or even "tall and skinny" shapes are covered as well). The library is typically used to generate code up to the specified [threshold](documentation/libxsmm_tune.md#auto-dispatch). Raising the threshold may not only generate excessive amounts of code (due to unrolling in M or K dimension), but also miss to implement a tiling scheme to effectively utilize the cache hierarchy. For auto-dispatched problem-sizes above the configurable threshold (explicitly JIT'ted code is **not** subject to the threshold), LIBXSMM is falling back to BLAS. In terms of GEMM, the supported kernels are limited to *Alpha := 1*, *Beta := \{ 1, 0 \}*, and *TransA := 'N'*.
+
+**<a name="what-is-a-small-convolution"></a>What is a small convolution?** In the last years, new workloads such as deep learning and more specifically convolutional neural networks (CNN) emerged and are pushing the limits of today's hardware. One of the expensive kernels is a small convolution with certain kernel sizes such that calculations in the frequency space is not the most efficient method when compared with direct convolutions. LIBXSMM's current support for convolutions aims for an easy to use invocation of small (direct) convolutions, which are intended for CNN training and classification.
+
+**<a name="getting-started"></a><a name="hello-libxsmm"></a>Getting Started**: The following C++ code is focused on a specific functionality but may be considered as [Hello LIBXSMM](https://github.com/hfp/libxsmm/tree/master/samples/hello). Build the example with `cd /path/to/libxsmm; make STATIC=0` (shared library), save the code under `hello.cpp` (below) and compile with `g++ -I/path/to/libxsmm/include hello.cpp -L/path/to/libxsmm/lib -lxsmm -lblas -o hello` (GNU CCC), and finally execute with `LD_LIBRARY_PATH=/path/to/libxsmm/lib LIBXSMM_VERBOSE=2 ./hello`.
+
+```cpp
+#include <libxsmm.h>
+#include <vector>
+int main(/*int argc, char* argv[]*/) {
+  typedef double T;
+  int batchsize = 1000, m = 13, n = 5, k = 7;
+  std::vector<T> a(batchsize * m * k), b(batchsize * k * n), c(m * n, 0);
+  /* C/C++ and Fortran interfaces are available */
+  typedef libxsmm_mmfunction<T> kernel_type;
+  /* generates and dispatches a matrix multiplication kernel (C++ functor) */
+  kernel_type kernel(LIBXSMM_GEMM_FLAG_NONE, m, n, k, 1.0 /*alpha*/, 1.0 /*beta*/);
+  assert(kernel);
+  for (int i = 0; i < batchsize; ++i) { /* initialize input */
+    for (int ki = 0; ki < k; ++ki) {
+      for (int j = 0; j < m; ++j) a[i * j * ki] = static_cast<T>(1) / ((i + j + ki) % 25);
+      for (int j = 0; j < n; ++j) b[i * j * ki] = static_cast<T>(7) / ((i + j + ki) % 75);
+    }
+  }
+  /* kernel multiplies and accumulates matrices: C += Ai * Bi */
+  for (int i = 0; i < batchsize; ++i) kernel(&a[i * m * k], &b[i * k * n], &c[0]);
+}
+```
+
+Plain [C code](https://github.com/hfp/libxsmm/blob/master/samples/hello/hello.c) as well as [Fortran code](https://github.com/hfp/libxsmm/blob/master/samples/hello/hello.f) resemble the same [example](https://github.com/hfp/libxsmm/tree/master/samples/hello).
+
+## Interfaces and Domains<a name="interfaces"></a>
+
+### Overview<a name="general-interface"></a>
+
+Please have a look at [https://github.com/hfp/libxsmm/tree/master/include](https://github.com/hfp/libxsmm/tree/master/include) for all published functions. Get started with the following list of available domains and documented functionality:
+
+* MM: [Matrix Multiplication](#matrix-multiplication)
+* DNN: [Deep Neural Networks](#deep-neural-networks)
+* AUX: [Service Functions](#service-functions)
+* PERF: [Performance](#performance)
+* BE: [Backend](#jit-backend)
+
+To initialize library internal resources, an explicit initialization routine helps to avoid lazy initialization overhead when calling LIBXSMM for the first time. The library deallocates internal resources at program exit, but also provides a companion of the afore mentioned initialization (finalize).
+
+```C
+/** Initialize the library; pay for setup cost at a specific point. */
+void libxsmm_init(void);
+/** De-initialize the library and free internal memory (optional). */
+void libxsmm_finalize(void);
+```
+
+### Matrix Multiplication<a name="interface-for-matrix-multiplication"></a>
+
+This domain (MM) supports Small Matrix Multiplications (SMM), batches of multiple multiplications as well as the industry-standard interface for GEneral Matrix Matrix multiplication (GEMM).
+
+The [Matrix Multiplication domain (MM)](documentation/libxsmm_mm.md) contains routines for:
+
+* [Small, tiled, and parallelized matrix multiplications](documentation/libxsmm_mm.md#overview)
+* [Manual code dispatch (customized matrix batches)](documentation/libxsmm_mm.md#manual-code-dispatch)
+* [Batched multiplication (explicit interface)](documentation/libxsmm_mm.md#batched-multiplication)
+* [Call wrapper (static and dynamic linkage)](documentation/libxsmm_mm.md#call-wrapper)
+
+### Deep Learning<a name="interface-for-convolutions"></a>
+
+This domain (DL) is detailed by a separate [document](documentation/libxsmm_dl.md). It may be inspiring to have a look at the light-weight GxM framework, which uses LIBXSMM for end-to-end Deep Learning.
+
+### Service Functions
+
+For convenient operation of the library and to ease integration, some service routines are available. These routines may not belong to the core functionality of LIBXSMM (SMM or DNN domain), but users are encouraged to use this domain (AUX). There are two categories: (1)&#160;routines which are available for C and FORTRAN, and (2)&#160;routines that are only available per C interface.
+
+The [service function domain (AUX)](documentation/libxsmm_aux.md) contains routines for:
+
+* [Getting and setting the target architecture](documentation/libxsmm_aux.md#getting-and-setting-the-target-architecture)
+* [Getting and setting the verbosity](documentation/libxsmm_aux.md#getting-and-setting-the-verbosity)
+* [Measuring time durations (timer)](documentation/libxsmm_aux.md#timer-facility)
+* [Dispatching user-data and multiple kernels](documentation/libxsmm_aux.md#user-data-dispatch)
+* [Loading and storing data (I/O)](documentation/libxsmm_aux.md#meta-image-file-io)
+* [Allocating memory](documentation/libxsmm_aux.md#memory-allocation)
+
+### Backend<a name="jit-backend"></a>
+
+More information about the JIT-backend and the code generator can be found in a separate [document](documentation/libxsmm_be.md), which also includes information about LIBXSMM's stand-alone <a name="generator-driver"></a>[generator-driver](documentation/libxsmm_be.md#generator-driver) programs.
+
+## Build Instructions
+
+### Overview
+
+The main interface file is *generated*, and it is therefore **not** stored in the code repository. Instead, one may have a look at the code generation template files for [C/C++](https://github.com/hfp/libxsmm/blob/master/src/template/libxsmm.h#L36) and [FORTRAN](https://github.com/hfp/libxsmm/blob/master/src/template/libxsmm.f#L32). There are two ways prepared to build and use LIBXSMM:
+
+* [Classic Library (ABI)](#classic-library-abi) and [Link Instructions](#link-instructions) (C/C++ and FORTRAN)
+* [Header-Only](#header-only) (C and C++)
+
+**NOTE**: LIBXSMM is available as prebuilt package for Fedora/RedHat/CentOS, Ubuntu, and FreeBSD. Further, LIBXSMM can be installed with the [Spack Package Manager](http://computation.llnl.gov/projects/spack-hpc-package-manager) or per [EasyBuild+EasyConfig](https://github.com/easybuilders).
+
+### Classic Library (ABI)
+
+The build system relies on GNU&#160;Make (typically associated with the `make` command, but e.g. FreeBSD is calling it `gmake`). The build can be customized by using key&#8209;value pairs. Key&#8209;value pairs can be supplied in two ways: (1)&#160;after the "make" command, or (2)&#160;prior to the "make" command (`env`) which is effectively the same as exporting the key&#8209;value pair as an environment variable (`export`, or `setenv`). Both methods can be mixed (the second method may require make's `-e` flag).
+
+<a name="zero-config-abi"></a>In contrast to [header-only](#zero-config) which does not require configuration by default, 3rd-party build systems can compile and link LIBXSMM's sources but still avoid configuring the library (per `libxsmm_config.py`). The prerequisite to omit configuration is to opt-in by defining LIBXSMM_DEFAULT_CONFIG (`-D`). The zero-config feature is not available for LIBXSMM's Fortran interface.
+
+**NOTE**: By default, C/C++ and FORTRAN compilers are needed (some sample code is written in C++). Beside of specifying the compilers (`make CXX=g++ CC=gcc FC=gfortran` and maybe `AR=ar`), the need for a FORTRAN compiler can be relaxed (`make FC=` or `make FORTRAN=0`). The latter affects the availability of the MODule file and the corresponding 'libxsmm.f' library (the interface 'libxsmm.f' is still generated).
+
+The build system considers a set of given key-value pairs as a single unique build and triggers a rebuild for a distinct set of flags. For more advanced builds or additional background, please consult the section about [Customization](documentation/libxsmm_tune.md). To generate the interface of the library inside of the 'include' directory and to build the static library (by default, STATIC=1 is activated). Run any (or both) of the following command(s):
+
+```bash
+make STATIC=0
+make
+```
+
+On CRAY systems, the CRAY Compiling Environment (CCE) should be used regardless of utilizing the CRAY compiler, the Intel Compiler, or the GNU&#160;Compiler Collection (GCC). The CCE is eventually suppressing to build shared libraries (STATIC=0). In any case, (1)&#160;switch to the desired compiler (module load/switch), and (2)&#160;rely on:
+
+```bash
+make CXX=CC CC=cc FC=ftn
+```
+
+A variety of build environments is out-of-the-box compatible, see [https://github.com/hfp/libxsmm/wiki/Compatibility](https://github.com/hfp/libxsmm/wiki/Compatibility). If the build process is not successful, it may help to avoid advanced GCC flags. This is useful with a tool chain, which pretends to be GCC-compatible (and is treated as such) but fails to consume the afore mentioned flags:
+
+```bash
+make COMPATIBLE=1
+```
+
+<a name="outdated-binutils"></a>In case of outdated Binutils, compilation can fail to assemble code when building the library (this has nothing to do with JIT-generated code and it does not affect how JIT-code is targeting the system). In contrast to the default (`INTRINSICS=2`), `INTRINSICS=1` enables to statically depend on the desired target, e.g., `AVX=3 MIC=0`, or `AVX=2` (if the target is omitted, the default target is used). Try to work around failing compilation with:
+
+```bash
+make INTRINSICS=1
+```
+
+To test and validate a build, please consult [https://github.com/hfp/libxsmm/wiki/Validation](https://github.com/hfp/libxsmm/wiki/Validation). To run some basic sanity checks, remember that each set of given key-value pairs represents a different build (and test):
+
+```bash
+make STATIC=0 tests
+```
+
+To remove intermediate files, or to remove all generated files and folders (including the interface and the library archives), run one of the make-targets below. An additional distclean-target recursively cleans the entire tree (after version&#160;1.9).
+
+```bash
+make clean
+make realclean
+```
+
+<a name="fortran"></a>FORTRAN code can make use of LIBXSMM:
+
+* By using the module and linking with 'libxsmmf', 'libxsmm', and (optionally) 'libxsmmext',
+* <a name="header-only-fortran"></a>By including 'libxsmm.f' and linking with 'libxsmm', and (optionally) 'libxsmmext', or
+* By (implicitly) calling a SUBROUTINE and linking with 'libxsmm', and (optionally) 'libxsmmext'.
+
+**Note**: Using the Fortran module or including the interface, requires at least a Fortran&#160;2003 compiler (F2K3). FORTRAN&#160;77 compatibility is only implicitly available (no interface), and the available subset of routines is documented in 'libxsmm.f' and marked with [comments](https://github.com/hfp/libxsmm/search?q=implementation+provided+for+Fortran+77+compatibility) (part of the implementation).
+
+### Header-Only
+
+Version&#160;1.4.4 introduced support for "header-only" usage in C and C++. By only including 'libxsmm_source.h' allows to get around building the library. However, this gives up on a clearly defined application binary interface (ABI). An ABI may allow for hot-fixes after deploying an application (when relying on the shared library form), and it may also ensure to only rely on the public interface of LIBXSMM. In contrast, the header-only form not only exposes the internal implementation of LIBXSMM but can also increase the turnaround time during development of an application (due to longer compilation times). The header file is intentionally named "libxsmm_**source**.h" since this header file relies on the [src](https://github.com/hfp/libxsmm/tree/master/src) directory (with the implications as noted earlier).
+
+<a name="zero-config"></a>The header-only form depends on 'libxsmm_source.h' which is *generated* according to the content of the source folder (`src`). LIBXSMM&#160;1.16 (and later) provides header-only support without invoking a make-target (zero configuration) for any given checkout of LIBXSMM. To use configured header-only (non-default), LIBXSMM_CONFIGURED must be defined (`-D`). Previously, it was necessary to invoke `make header-only` (v1.6.2 or later), `make cheader` (prior to v1.6.2), or any target building the library (`make`). The zero-config feature allows 3rd-party build systems an easier integration of LIBXSMM, which also holds true if the system builds LIBXSMM from source (see [classic ABI](#zero-config-abi)). Fortran code may [include](#header-only-fortran) `libxsmm.f` but still requires that interface to be generated.
+
+**NOTE**: building an application applies the same build settings to LIBXSMM! For instance, to omit debug code inside of LIBXSMM `NDEBUG` must be defined (`-DNDEBUG`).
+
+## Link Instructions
+
+Using the [classic ABI](#classic-library-abi) (including [Fortran](#fortran) code), requires linking LIBXSMM against the application. The library is agnostic with respect to the threading-runtime, and therefore an application is free to use any threading runtime (e.g., OpenMP). The library is also thread-safe, and multiple application threads can call LIBXSMM's routines concurrently. Enabling OpenMP for LIBXSMM's main library is supported as well (OMP=1), and mostly affects the synchronization primitives used inside of the library. All of the "omp" functionality (function postfix) is served by the 'libxsmmext' library, which is automatically built with OpenMP enabled. When using this "omp" functionality, 'libxsmmext' needs to be present at the link line.
+
+<a name="table-of-libraries"></a>Library | Purpose
+:-------------|---------
+libxsmm       | Thread-safe core functions (same routine can be called concurrently). Contains routines that can take a thread-ID and the number of library-external threads.
+libxsmmf      | Necessary when using the Fortran MODule but not when including `libxsmm.f` or relying on implicit interfaces ([Fortran&#160;77](https://github.com/hfp/libxsmm/search?q=implementation+provided+for+Fortran+77+compatibility)).
+libxsmmext    | Provides library-internal OpenMP-threaded functions carrying the `omp` postfix when compared to function name names of the core library.
+libxsmmnoblas | Supplies faked symbols for `dgemm` (and others) and thereby removes the need to link against a LAPACK/BLAS library.
+
+<a name="pkg-config"></a>To ease linking with LIBXSMM, `pkg-config` can be used. For example:
+
+```bash
+export PKG_CONFIG_PATH=/path/to/libxsmm/lib
+pkg-config libxsmm --libs
+```
+
+Similarly, an application is free to choose any BLAS or LAPACK library (if the link model available on the OS supports this), and therefore linking GEMM routines when linking LIBXSMM itself (by supplying BLAS=1&#124;2) may prevent a user from making this decision at the time of linking the actual application. To use LIBXSMM without GEMM-related functionality, any BLAS-dependency can be removed in two ways: (1)&#160;building a special library with `make BLAS=0`, or (2)&#160;linking the application against the 'libxsmmnoblas' library. If an application however uses BLAS already, the [Call Wrapper](documentation/libxsmm_mm.md#call-wrapper) can be used to intercept existing BLAS calls (and to rely on LIBXSMM instead).
+
+**NOTE**: LIBXSMM does not support to dynamically link 'libxsmm' or 'libxsmmext' ("so"), when BLAS is linked statically ("a"). If BLAS is linked statically, the static version of LIBXSMM must be used!
+
+### Installation
+
+There are two main mechanisms to install LIBXSMM (both mechanisms can be combined): (1)&#160;building the library in an out&#8209;of&#8209;tree fashion, and (2)&#160;installing into a certain location. <a name="install-build"></a>Building in an out&#8209;of&#8209;tree fashion looks like:
+
+```bash
+cd libxsmm-install
+make -f /path/to/libxsmm/Makefile
+```
+
+<a name="install-prefix"></a>Installation into a specific location looks like (`PREFIX` or `DESTDIR`):
+
+```bash
+make MNK="1 2 3 4 5" PREFIX=/path/to/libxsmm-install install
+```
+
+<a name="install-destdir"></a>Both `PREFIX` and `DESTDIR` are equivalent and can be relative or absolute paths. An installation can be repeated for different locations without triggering a rebuild. The prefix directory *inside* of each of the [package configuration files](#pkg-config) is set to where LIBXSMM is built (staging folder) unless `PREFIX` or `DESTDIR` is specified. The effect of `PREFIX` (or `DESTDIR`) with respect to the pkg-config files is independent of whether the install-target is invoked or not (make).
+
+Further, performing `make install-minimal` omits the documentation (default: 'PREFIX/share/libxsmm'). Moreover, PINCDIR, POUTDIR, PBINDIR, and PDOCDIR allow to customize the locations underneath of the PREFIX location. To build a general package for an unpredictable audience (Linux distribution, or similar), it is advised to not over-specify or customize the build step, i.e., JIT, SSE, AVX, OMP, BLAS, etc. should not be used. The following is building and installing a complete set of libraries where the generated interface matches both the static and the shared libraries:
+
+```bash
+make PREFIX=/path/to/libxsmm-install STATIC=0 install
+make PREFIX=/path/to/libxsmm-install install
+```
+
+## Runtime Control<a name="running"></a>
+
+### Verbose Mode
+
+The [verbose mode](documentation/libxsmm_aux.md#getting-and-setting-the-verbosity) (level of verbosity) allows for an insight into the code dispatch mechanism by receiving a small tabulated statistic as soon as the library terminates. The design point for this functionality is to not impact the performance of any critical code path, i.e., verbose mode is always enabled and does not require symbols (SYM=1) or debug code (DBG=1). The statistics appears (`stderr`) when the environment variable LIBXSMM_VERBOSE is set to a non-zero value. For example:
+
+```bash
+LIBXSMM_VERBOSE=1 ./myapplication
+[... application output]
+
+HSW/SP      TRY    JIT    STA    COL
+   0..13      0      0      0      0
+  14..23      0      0      0      0
+ 24..128      3      3      0      0
+```
+
+The tables are distinct between single-precision and double-precision, but either table is pruned if all counters are zero. If both tables are pruned, the library shows the code path which would have been used for JIT'ting the code: `LIBXSMM_TARGET=hsw` (otherwise the code path is shown in the table's header). The actual counters are collected for three buckets: small kernels (MNK<sup>1/3</sup>&#160;&lt;=&#160;13), medium-sized kernels (13&#160;&lt;&#160;MNK<sup>1/3</sup>&#160;&lt;=&#160;23), and larger kernels (23&#160;&lt;&#160;MNK<sup>1/3</sup>&#160;&lt;=&#160;64; the actual upper bound depends on LIBXSMM_MAX_MNK as selected at compile-time). Keep in mind, that "larger" is supposedly still small in terms of arithmetic intensity (which grows linearly with the kernel size). Unfortunately, the arithmetic intensity depends on the way a kernel is used (which operands are loaded/stored into main memory) and it is not performance-neutral to collect this information.
+
+The TRY counter represents all attempts to register statically generated kernels, and all attempts to dynamically generate and register kernels. The TRY counter includes rejected JIT requests due to unsupported GEMM arguments. The JIT and STA counters distinct the successful cases of the afore mentioned event (TRY) into dynamically (JIT) and statically (STA) generated code. In case the capacity (O(*n*)&#160;=&#160;10<sup>5</sup>) of the code registry is exhausted, no more kernels can be registered although further attempts are not prevented. Registering many kernels (O(*n*)&#160;=&#160;10<sup>3</sup>) may ramp the number of hash key collisions (COL), which can degrade performance. The latter is prevented if the small thread-local cache is utilized effectively.
+
+Since explicitly JIT-generated code (`libxsmm_?mmdispatch`) does not fall under the THRESHOLD criterion, the above table is extended by one line if large kernels have been requested. This indicates a missing threshold-criterion (customized dispatch), or asks for cache-blocking the matrix multiplication. The latter is already implemented by LIBXSMM's "medium-sized" GEMM routines (`libxsmm_?gemm_omp`), which perform a tiled multiplication. Setting a verbosity level of at least two summarizes the number of registered JIT-generated kernels, which includes the total size and counters for GEMM, MCOPY (matrix copy), and TCOPY (matrix transpose) kernels.
+
+```bash
+Registry: 20 MB (gemm=0 mcopy=14 tcopy=0)
+```
+
+If the call-wrapper is used, an additional runtime statistic becomes available (see [Call Wrapper](documentation/libxsmm_mm.md#call-wrapper)).
+
+<a name="objdump"></a>**NOTE**: Setting LIBXSMM_VERBOSE to a negative value will binary-dump each generated JIT kernel to a file with each file being named like the function name shown in [Intel&#160;VTune](documentation/libxsmm_prof.md#intelvtuneamplifier). Disassembly of the raw binary files can be accomplished by:
+
+```bash
+objdump -D -b binary -m i386 -M x86-64 [JIT-dump-file]
+```
+
+### Call Trace
+
+During the initial steps of employing the LIBXSMM API, one may rely on a debug version of the library (`make DBG=1`). The latter also implies console output (`stderr`) in case of an error/warning condition inside of the library. It is also possible to print the execution flow (call trace) inside of LIBXSMM (can be combined with DBG=1 or OPT=0):
+
+```bash
+make TRACE=1
+```
+
+Building an application which traces calls (inside of the library) requires the shared library of LIBXSMM, alternatively the application is required to link the static library of LIBXSMM in a dynamic fashion (GNU tool chain: `-rdynamic`). Tracing calls (without debugger) can be then accomplished by an environment variable called LIBXSMM_TRACE.
+
+```bash
+LIBXSMM_TRACE=1 ./myapplication
+```
+
+Syntactically up to three arguments separated by commas (which allows to omit arguments) are taken (*tid*,*i*,*n*): *tid* signifies the ID of the thread to be traced with 1...NTHREADS being valid and where LIBXSMM_TRACE=1 is filtering for the "main thread" (in fact the first thread running into the trace facility); grabbing all threads (no filter) can be achieved by supplying a negative id (which is also the default when omitted). The second argument is pruning higher levels of the call-tree with *i=1* being the default (level zero is the highest at the same level as the main function). The last argument is taking the number of inclusive call levels with *n=-1* being the default (signifying no filter).
+
+Although the `ltrace` (Linux utility) provides similar insight, the trace facility might be useful due to the afore mentioned filtering expressions. Please note that the trace facility is severely impacting the performance (even with LIBXSMM_TRACE=0), and this is not just because of console output but rather since inlining (internal) functions might be prevented along with additional call overhead on each function entry and exit. Therefore, debug symbols can be also enabled separately (`make SYM=1`; implied by TRACE=1 or DBG=1) which might be useful when profiling an application.
+
+## Performance
+
+<a name="profiling"></a>Profiling an application, which uses LIBXSMM's JIT-code is well-supported. The library supports Intel&#160;VTune&#160;Amplifier and Linux&#160;perf. Details are given on how to include profiler support, and how to run the application.
+
+* [Profiling using Intel&#160;VTune&#160;Amplifier](documentation/libxsmm_prof.md#intelvtuneamplifier)
+* [Profiling using Linux&#160;perf](documentation/libxsmm_prof.md#linuxperf)
+
+<a name="tuning"></a>At build time, a variety of options exist to customize LIBXSMM. The library is setup for a broad range of use cases, which include sophisticated defaults for typical use.
+
+* [Customizing performance](documentation/libxsmm_tune.md#tuning)
+* <a name="auto-dispatch"></a>[Tuning auto-dispatch](documentation/libxsmm_tune.md#auto-dispatch)
+
+<a name="results"></a>To find performance results of applications or performance reproducers, the repository provides an orphaned branch called "results" which collects collateral material such as measured performance results along with explanatory figures. The results can be found at [https://github.com/hfp/libxsmm/tree/results#libxsmm-results](https://github.com/hfp/libxsmm/tree/results#libxsmm-results), or the results can be cloned as shown below.
+
+```bash
+git clone --branch results \
+  https://github.com/hfp/libxsmm.git \
+  libxsmm-results
+```
+
+Please note that comparing performance results depends on whether the operands of the matrix multiplication are streamed or not. For example, multiplying with all matrices covered by the L1 cache may have an emphasis towards an implementation which perhaps performs worse for the real workload (if this real workload needs to stream some or all matrices from the main memory). Most of the [code samples](https://github.com/hfp/libxsmm/tree/master/samples) are aimed to reproduce performance results, and it is encouraged to model the exact case or to look at real [applications](#applications).
+
+## Applications
+
+### High Performance Computing (HPC)
+
+**\[1]&#160;[https://cp2k.org/](https://cp2k.org/)**: Open Source Molecular Dynamics and the [DBCSR library](https://github.com/cp2k/dbcsr), which processes batches of small matrix multiplications. The batches originate from a distributed block-sparse matrix with problem-specific small matrices. Starting with [CP2K&#160;3.0](https://www.cp2k.org/version_history), LIBXSMM can substitute CP2K's 'libsmm' library.
+
+**\[2]&#160;[https://github.com/SeisSol/SeisSol/](https://github.com/SeisSol/SeisSol/)**: SeisSol is one of the leading codes for earthquake scenarios, for simulating dynamic rupture processes. LIBXSMM provides highly optimized assembly kernels which form the computational back-bone of SeisSol (see [https://github.com/TUM-I5/seissol_kernels/](https://github.com/TUM-I5/seissol_kernels/).
+
+**\[3]&#160;[https://github.com/NekBox/NekBox](https://github.com/NekBox/NekBox)**: NekBox is a highly scalable and portable spectral element code, which is inspired by the [Nek5000](https://nek5000.mcs.anl.gov/) code. NekBox is specialized for box geometries and intended to prototype new methods as well as to leverage FORTRAN beyond the FORTRAN&#160;77 standard. LIBXSMM can be used to substitute the [MXM_STD](https://github.com/Nek5000/NekBox/blob/box/mxm_std.F90) code. Please also note LIBXSMM's [NekBox reproducer](https://github.com/hfp/libxsmm/tree/master/samples/nek#nek-sample-collection).
+
+**\[4]&#160;[https://github.com/Nek5000/Nek5000](https://github.com/Nek5000/Nek5000)**: Nek5000 is the open-source, highly-scalable, always-portable spectral element code from [https://nek5000.mcs.anl.gov/](https://nek5000.mcs.anl.gov/). The development branch of the Nek5000 code [incorporates](https://github.com/Nek5000/Nek5000/blob/master/core/mxm_wrapper.f) LIBXSMM.
+
+**\[5]&#160;[http://pyfr.org/](http://pyfr.org/)**: PyFR is an open-source Python based framework for solving advection-diffusion type problems on streaming architectures by using the flux reconstruction approach. PyFR&#160;1.6.0 optionally [incorporates LIBXSMM](http://pyfr.org/user_guide.php) as a matrix multiplication provider for the OpenMP backend. Please also note LIBXSMM's [PyFR-related code sample](https://github.com/hfp/libxsmm/tree/master/samples/pyfr).
+
+**\[6]&#160;[http://dial3343.org/about/](http://dial3343.org/about/)**: The Extreme-scale Discontinuous Galerkin Environment (EDGE) is a solver for hyperbolic partial differential equations with emphasis on seismic simulations. The EDGE [source code](https://github.com/3343/edge) optionally relies on LIBXSMM, but for high performance LIBXSMM's kernels are highly recommended.
+
+**\[7]&#160;[https://sxs-collaboration.github.io/spectre/](https://sxs-collaboration.github.io/spectre/)**: SpECTRE is an open-source code for multi-scale, multi-physics problems in astrophysics and gravitational physics which runs at petascale and is designed for exascale computers. In the future, SpECTRE may be applied to problems across discipline boundaries in fluid dynamics, geoscience, plasma physics, nuclear physics, and engineering.
+
+**\[8]&#160;[https://ceed.exascaleproject.org/ceed-code/](https://ceed.exascaleproject.org/ceed-code/)**: The Center for Efficient Exascale Discretizations (CEED) is building on the efforts of the Nek5000, MFEM, MAGMA, OCCA and PETSc projects to develop application program interfaces (APIs), both at high-level and at low-level to enable applications to take advantage of high-order methods. The CEED low-level API, [libCEED](https://ceed.exascaleproject.org/libceed/) uses LIBXSMM as a [backend](https://github.com/CEED/libCEED#backends) for high performance on CPUs.
+
+**\[9]&#160;[https://github.com/romeric/Fastor](https://github.com/romeric/Fastor)**: Fastor is a light-weight high performance tensor algebra framework for modern C++ and can optionally use LIBXSMM as [JIT-backend](https://github.com/romeric/Fastor/wiki/9.-Using-the-LIBXSMM-MKL-JIT-backend).
+
+### Machine Learning (ML)
+
+**\[10]&#160;[https://github.com/plaidml/plaidml](https://github.com/plaidml/plaidml)**: PlaidML is an open source tensor compiler aiming for performance portability across a wide range of CPUs, GPUs and other accelerators. Combined with Intel’s nGraph compiler, PlaidML is targeting popular deep learning frameworks such as PyTorch, Keras (TensorFlow), and OpenVino. [PlaidML/v1](https://github.com/plaidml/plaidml/tree/plaidml-v1) (development branch) adopted [MLIR](https://mlir.llvm.org/), an extensible compiler infrastructure gaining industry-wide adoption. PlaidML/v1 started using LIBXSMM as backend for targeting CPUs.
+
+**\[11]&#160;[https://github.com/intel/intel-extension-for-pytorch](https://github.com/intel/intel-extension-for-pytorch)**: Intel Extension for PyTorch aims for a smooth user experience of PyTorch on CPUs by the means of good performance. The extension pack started to rely on [LIBXSMM for achieving high performance on CPUs](https://arxiv.org/abs/2005.04680).
+
+**\[12]&#160;[https://www.tensorflow.org/](https://tensorflow.org/)**: TensorFlow&trade; is an open source software library for numerical computation using data flow graphs. TensorFlow was originally developed by researchers and engineers working on the Google Brain Team for the purposes of conducting machine learning and deep neural networks research. LIBXSMM can be [used](documentation/tensorflow.md#tensorflow-with-libxsmm) to increase the performance of TensorFlow on Intel hardware.
+
+**\[13]&#160;[https://github.com/IntelLabs/SkimCaffe](https://github.com/IntelLabs/SkimCaffe#skimcaffe-specific-description)**: SkimCaffe from Intel Labs is a Caffe branch for training of sparse CNNs, which provide 80-95% sparsity in convolutions and fully-connected layers. LIBXSMM's SPMDM domain (SParseMatrix-DenseMatrix multiplication) evolved from SkimCaffe, and since then LIBXSMM implements the sparse operations in SkimCaffe.
+
+**\[14]&#160;[https://github.com/baidu-research/DeepBench](https://github.com/baidu-research/DeepBench#deepbench)**: The primary purpose of DeepBench is to benchmark operations that are important to deep learning on different hardware platforms. LIBXSMM's DNN primitives have been [incorporated into DeepBench](https://github.com/baidu-research/DeepBench/tree/master/code/intel/convolution/libxsmm_conv) to demonstrate an increased performance of deep learning on Intel hardware.
+
+### Automated Driving (AD)
+
+**\[15]&#160;[https://software.seek.intel.com/accelerating-eigen-math-library](https://software.seek.intel.com/accelerating-eigen-math-library)**: Accelerating The Eigen Math Library for Automated Driving Workloads: The Need for Speed in Kalman Filtering. An article in [Issue&#160;31](https://software.intel.com/sites/default/files/managed/4f/73/parallel-universe-issue-31.pdf) of The Parallel Universe magazine.
+
+## References
+
+**\[1]&#160;[https://sc19.supercomputing.org/proceedings/tech_poster/tech_poster_pages/rpost244.html](https://sc19.supercomputing.org/proceedings/tech_poster/tech_poster_pages/rpost244.html)**: High-Performance Deep Learning via a Single Building Block ([poster](https://sc19.supercomputing.org/proceedings/tech_poster/poster_files/rpost244s2-file2.pdf) and [abstract](https://sc19.supercomputing.org/proceedings/tech_poster/poster_files/rpost244s2-file3.pdf)), SC’19: The International Conference for High Performance Computing, Networking, Storage, and Analysis, Denver (Colorado).
+
+**\[2]&#160;[https://sc18.supercomputing.org/presentation/?id=pap322&sess=sess190](https://sc18.supercomputing.org/presentation/?id=pap322&sess=sess190)**: Anatomy of High-Performance Deep Learning Convolutions on SIMD Architectures ([arXiv:1808.05567v2 paper](https://arxiv.org/pdf/1808.05567v2)). SC'18: The International Conference for High Performance Computing, Networking, Storage, and Analysis, Dallas (Texas).
+
+**\[3]&#160;[http://sc17.supercomputing.org/SC17%20Archive/tech_poster/tech_poster_pages/post190.html](http://sc17.supercomputing.org/SC17%20Archive/tech_poster/tech_poster_pages/post190.html)**: Understanding the Performance of Small Convolution Operations for CNN on Intel Architecture ([poster](http://sc17.supercomputing.org/SC17%20Archive/tech_poster/poster_files/post190s2-file2.pdf) and [abstract](http://sc17.supercomputing.org/SC17%20Archive/tech_poster/poster_files/post190s2-file3.pdf)), SC’17: The International Conference for High Performance Computing, Networking, Storage, and Analysis, Denver (Colorado).
+
+**\[4]&#160;[http://sc16.supercomputing.org/presentation/?id=pap364&sess=sess153](http://sc16.supercomputing.org/presentation/?id=pap364&sess=sess153)**: LIBXSMM: Accelerating Small Matrix Multiplications by Runtime Code Generation ([paper](http://www.computer.org/csdl/proceedings/sc/2016/8815/00/8815a981.pdf)). SC'16: The International Conference for High Performance Computing, Networking, Storage and Analysis, Salt Lake City (Utah).
+
+**\[5]&#160;[http://sc15.supercomputing.org/sites/all/themes/SC15images/tech_poster/tech_poster_pages/post137.html](http://sc15.supercomputing.org/sites/all/themes/SC15images/tech_poster/tech_poster_pages/post137.html)**: LIBXSMM: A High Performance Library for Small Matrix Multiplications ([poster](http://sc15.supercomputing.org/sites/all/themes/SC15images/tech_poster/poster_files/post137s2-file2.pdf) and [abstract](http://sc15.supercomputing.org/sites/all/themes/SC15images/tech_poster/poster_files/post137s2-file3.pdf)). SC'15: The International Conference for High Performance Computing, Networking, Storage and Analysis, Austin (Texas).
+
+## Articles
+
+**\[1]&#160;[https://www.nextplatform.com/2019/10/09/cloudy-supercomputers-join-the-hpc-petascale-club/](https://www.nextplatform.com/2019/10/09/cloudy-supercomputers-join-the-hpc-petascale-club/)**: Cloudy Supercomputers Join the HPC Petascale Club. An article written by Rob Farber, 2019. The article covers LIBXSMM in a separate section.
+
+**\[2]&#160;[https://www.nextplatform.com/2019/06/26/counting-the-cost-of-scaling-hpc-applications/](https://www.nextplatform.com/2019/06/26/counting-the-cost-of-scaling-hpc-applications/)**: Counting The Cost Of Scaling HPC Applications. An article written by Timothy Prickett Morgan, 2019. This article is about CP2K Open Source Molecular Dynamics and not about LIBXSMM in particular. However, LIBXSMM was key for application performance.
+
+**\[3]&#160;[https://www.nextplatform.com/2019/06/26/counting-the-cost-of-scaling-hpc-applications/](https://www.nextplatform.com/2019/06/26/counting-the-cost-of-scaling-hpc-applications/)**: Azure Benchmarks HC-series Across Twentythousand Cores for HPC. An article written by John Russell, 2019. This article is about CP2K Open Source Molecular Dynamics and not about LIBXSMM in particular. However, LIBXSMM was key for application performance.
+
+**\[4]&#160;[https://software.intel.com/sites/default/files/parallel-universe-issue-34.pdf](https://software.intel.com/en-us/download/parallel-universe-magazine-issue-34-october-2018)**: LIBXSMM: An Open Source-Based Inspiration for Hardware and Software Development at Intel. An article written by Hans Pabst, Greg Henry, and Alexander Heinecke, 2018.
+
+**\[5]&#160;[https://medium.com/@rmfarber/libxsmm-brings-deep-learning-lessons-learned-to-many-hpc-applications-9143c6c93125](https://medium.com/@rmfarber/libxsmm-brings-deep-learning-lessons-learned-to-many-hpc-applications-9143c6c93125)**: LIBXSMM Brings Deep-learning "Lessons Learned" to Many HPC Applications. An article written by Rob Farber, 2018.
+
+**\[6]&#160;[https://www.rdmag.com/article/2018/02/largest-supercomputer-simulation-sumatra-andaman-earthquake](https://www.rdmag.com/article/2018/02/largest-supercomputer-simulation-sumatra-andaman-earthquake)**: Largest Supercomputer Simulation of Sumatra-Andaman Earthquake. An article written by Linda Barney, 2018.
+
+**\[7]&#160;[https://software.intel.com/en-us/articles/intel-xeon-phi-delivers-competitive-performance-for-deep-learning-and-getting-better-fast](https://software.intel.com/en-us/articles/intel-xeon-phi-delivers-competitive-performance-for-deep-learning-and-getting-better-fast)**: Intel Xeon&#160;Phi Delivers Competitive Performance For Deep Learning - And Getting Better Fast. Article mentioning LIBXSMM's performance of convolution kernels with [DeepBench](https://github.com/baidu-research/DeepBench/tree/master/code/intel/convolution/libxsmm_conv). Intel Corporation, 2016.
+
+\n[end of README.md]\n[start of LICENSE.md]\nLICENSE.md
+# BSD 3-Clause License
+
+Copyright (c) 2009-2020, Intel Corporation  
+Copyright (c) 2016-2019, Google Inc.  
+Copyright (c) 2012-2014, Technische Universitaet Muenchen  
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+\n[end of LICENSE.md]\n[start of CONTRIBUTING.md]\nCONTRIBUTING.md
+# Contributing
+
+**Your contribution is very welcome!**
+
+Please visit our Wike page at [https://github.com/hfp/libxsmm/wiki/Contribute](https://github.com/hfp/libxsmm/wiki/Contribute).
+\n[end of CONTRIBUTING.md]\n[start of CODE_OF_CONDUCT.md]\nCODE_OF_CONDUCT.md
+# Contributor Covenant Code of Conduct
+
+## Our Pledge
+
+In the interest of fostering an open and welcoming environment, we as contributors and maintainers pledge to making participation in our project and our community a harassment-free experience for everyone, regardless of age, body size, disability, ethnicity, gender identity and expression, level of experience, nationality, personal appearance, race, religion, or sexual identity and orientation.
+
+## Our Standards
+
+Examples of behavior that contributes to creating a positive environment include:
+
+* Using welcoming and inclusive language
+* Being respectful of differing viewpoints and experiences
+* Gracefully accepting constructive criticism
+* Focusing on what is best for the community
+* Showing empathy towards other community members
+
+Examples of unacceptable behavior by participants include:
+
+* The use of sexualized language or imagery and unwelcome sexual attention or advances
+* Trolling, insulting/derogatory comments, and personal or political attacks
+* Public or private harassment
+* Publishing others' private information, such as a physical or electronic address, without explicit permission
+* Other conduct which could reasonably be considered inappropriate in a professional setting
+
+## Our Responsibilities
+
+Project maintainers are responsible for clarifying the standards of acceptable behavior and are expected to take appropriate and fair corrective action in response to any instances of unacceptable behavior.
+
+Project maintainers have the right and responsibility to remove, edit, or reject comments, commits, code, wiki edits, issues, and other contributions that are not aligned to this Code of Conduct, or to ban temporarily or permanently any contributor for other behaviors that they deem inappropriate, threatening, offensive, or harmful.
+
+## Scope
+
+This Code of Conduct applies both within project spaces and in public spaces when an individual is representing the project or its community. Examples of representing a project or community include using an official project e-mail address, posting via an official social media account, or acting as an appointed representative at an online or offline event. Representation of a project may be further defined and clarified by project maintainers.
+
+## Enforcement
+
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at hans.pabst@intel.com. The project team will review and investigate all complaints, and will respond in a way that it deems appropriate to the circumstances. The project team is obligated to maintain confidentiality with regard to the reporter of an incident. Further details of specific enforcement policies may be posted separately.
+
+Project maintainers who do not follow or enforce the Code of Conduct in good faith may face temporary or permanent repercussions as determined by other members of the project's leadership.
+
+## Attribution
+
+This Code of Conduct is adapted from the [Contributor Covenant][homepage], version 1.4, available at [https://contributor-covenant.org/version/1/4][version]
+
+[homepage]: https://contributor-covenant.org
+[version]: https://contributor-covenant.org/version/1/4/
+\n[end of CODE_OF_CONDUCT.md]\n[start of documentation/conf.py]\ndocumentation/conf.py
+###############################################################################
+# Copyright (c) Intel Corporation - All rights reserved.                      #
+# This file is part of the LIBXSMM library.                                   #
+#                                                                             #
+# For information on the license, see the LICENSE file.                       #
+# Further information: https://github.com/hfp/libxsmm/                        #
+# SPDX-License-Identifier: BSD-3-Clause                                       #
+###############################################################################
+# Hans Pabst (Intel Corp.)
+###############################################################################
+import sphinx_rtd_theme
+
+project = 'LIBXSMM'
+copyright = '2009-2020, Intel Corporation.'
+author = 'Intel Corporation'
+
+# m2r implies recommonmark
+extensions = [
+    "m2r"
+]
+
+master_doc = "index"
+source_suffix = [
+    ".rst", ".md"
+]
+
+exclude_patterns = [
+    "Thumbs.db",
+    ".DS_Store",
+    "_build"
+]
+
+html_theme = "sphinx_rtd_theme"
+html_theme_options = {
+    "navigation_depth": 2
+}
+html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+html_static_path = ["../.theme"]
+
+templates_path = ["_templates"]
+pygments_style = "sphinx"
+
+language = None
+\n[end of documentation/conf.py]\n[start of documentation/libxsmm_aux.md]\ndocumentation/libxsmm_aux.md
+## Service Functions
+
+### Target Architecture<a name="getting-and-setting-the-target-architecture"></a>
+
+This functionality is available for the C and Fortran interface. There are [ID based](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_cpuid.h#L47) (same for C and Fortran) and string based functions to query the code path (as determined by the CPUID), or to set the code path regardless of the presented CPUID features. The latter may degrade performance if a lower set of instruction set extensions is requested, which can be still useful for studying the performance impact of different instruction set extensions.  
+**NOTE**: There is no additional check performed if an unsupported instruction set extension is requested, and incompatible JIT-generated code may be executed (unknown instruction signaled).
+
+```C
+int libxsmm_get_target_archid(void);
+void libxsmm_set_target_archid(int id);
+
+const char* libxsmm_get_target_arch(void);
+void libxsmm_set_target_arch(const char* arch);
+```
+
+Available code paths (IDs and corresponding strings):
+
+* LIBXSMM_TARGET_ARCH_GENERIC: "**generic**", "none", "0"
+* LIBXSMM_X86_GENERIC: "**x86**", "x64", "sse2"
+* LIBXSMM_X86_SSE3: "**sse3**", "sse", "ssse3", "ssse"
+* LIBXSMM_X86_SSE4: "**wsm**", "nhm", "sse4", "sse4_1", "sse4.1", "sse4_2", "sse4.2"
+* LIBXSMM_X86_AVX: "**snb**", "avx"
+* LIBXSMM_X86_AVX2: "**hsw**", "avx2"
+* LIBXSMM_X86_AVX512_MIC: "**knl**", "mic"
+* LIBXSMM_X86_AVX512_KNM: "**knm**"
+* LIBXSMM_X86_AVX512_CORE: "**skx**", "skl", "avx3", "avx512"
+* LIBXSMM_X86_AVX512_CLX: "**clx**"
+* LIBXSMM_X86_AVX512_CPX: "**cpx**"
+
+The **bold** names are returned by `libxsmm_get_target_arch` whereas `libxsmm_set_target_arch` accepts all of the above strings (similar to the environment variable LIBXSMM_TARGET).
+
+### Verbosity Level<a name="getting-and-setting-the-verbosity"></a>
+
+The [verbose mode](index.md#verbose-mode) (level of verbosity) can be controlled using the C or Fortran API, and there is an environment variable which corresponds to `libxsmm_set_verbosity` (LIBXSMM_VERBOSE).
+
+```C
+int libxsmm_get_verbosity(void);
+void libxsmm_set_verbosity(int level);
+```
+
+### Timer Facility
+
+Due to the performance oriented nature of LIBXSMM, timer-related functionality is available for the C and Fortran interface ([libxsmm_timer.h](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_timer.h#L37) and [libxsmm.f](https://github.com/hfp/libxsmm/blob/master/include/libxsmm.f#L32)). The timer is used in many of the [code samples](https://github.com/hfp/libxsmm/tree/master/samples) to measure the duration of executing a region of the code. The timer is based on a monotonic clock tick, which uses a platform-specific resolution. The counter may rely on the time stamp counter instruction (RDTSC), which is not necessarily counting CPU cycles (reasons are out of scope in this context). However, `libxsmm_timer_ncycles` delivers raw clock ticks (RDTSC).
+
+```C
+typedef unsigned long long libxsmm_timer_tickint;
+libxsmm_timer_tickint libxsmm_timer_tick(void);
+double libxsmm_timer_duration(
+  libxsmm_timer_tickint tick0,
+  libxsmm_timer_tickint tick1);
+libxsmm_timer_tickint libxsmm_timer_ncycles(
+  libxsmm_timer_tickint tick0,
+  libxsmm_timer_tickint tick1);
+```
+
+### User-Data Dispatch
+
+To register a user-defined key-value pair with LIBXSMM's fast key-value store, the key must be binary reproducible. Structured key-data (`struct` or `class` type) that is potentially padded in a compiler/platform-specific fashion must be fully initialized before registration and dispatch/query, i.e., all gaps may be zero-filled before initializing data members (`memset(&mykey, 0, sizeof(mykey))`). This is because some compilers leave padded data uninitialized, which breaks binary reproducible keys. The size of the key is arbitrary but limited to LIBXSMM_DESCRIPTOR_MAXSIZE (64 Byte), and the size of the value can be of an arbitrary size. The given value is copied by LIBXSMM and may be initialized at registration-time or when dispatched. Registered data is released at program termination but can be manually unregistered and released (`libxsmm_xrelease`), e.g., to register a larger value for an existing key.
+
+```C
+void* libxsmm_xregister(const void* key, size_t key_size, size_t value_size, const void* value_init);
+void* libxsmm_xdispatch(const void* key, size_t key_size);
+```
+
+The Fortran interface is designed to follow the same flow as the C&#160;language: (1)&#160;`libxsmm_xdispatch` is used to query the value, and (2)&#160;if the value is a NULL-pointer, it is registered per `libxsmm_xregister`. Similar to C (`memset`), structured key-data must be zero-filled (`libxsmm_xclear`) even when followed by an element-wise initialization. A key based on a contiguous array has no gaps by definition and it is enough to initialize the array elements. A [Fortran example](https://github.com/hfp/libxsmm/blob/master/samples/utilities/dispatch/dispatch_udt.f) is given as part of the [Dispatch Microbenchmark](https://github.com/hfp/libxsmm/tree/master/samples/utilities/dispatch).
+
+```Fortran
+FUNCTION libxsmm_xregister(key, keysize, valsize, valinit)
+  TYPE(C_PTR), INTENT(IN), VALUE :: key
+  TYPE(C_PTR), INTENT(IN), VALUE, OPTIONAL :: valinit
+  INTEGER(C_INT), INTENT(IN) :: keysize, valsize
+  TYPE(C_PTR) :: libxsmm_xregister
+END FUNCTION
+
+FUNCTION libxsmm_xdispatch(key, keysize)
+  TYPE(C_PTR), INTENT(IN), VALUE :: key
+  INTEGER(C_INT), INTENT(IN) :: keysize
+  TYPE(C_PTR) :: libxsmm_xdispatch
+END FUNCTION
+```
+
+**NOTE**: This functionality can be used to, e.g., dispatch multiple kernels in one step if a code location relies on multiple kernels. This way, one can pay the cost of dispatch one time per task rather than according to the number of JIT-kernels used by this task. However, the functionality is not limited to multiple kernels but any data can be registered and queried. User-data dispatch uses the same implementation as regular code-dispatch.
+
+### Memory Allocation
+
+The C interface ([libxsmm_malloc.h](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_malloc.h)) provides functions for aligned memory one of which allows to specify the alignment (or to request an automatically selected alignment). The automatic alignment is also available with a `malloc` compatible signature. The size of the automatic alignment depends on a heuristic, which uses the size of the requested buffer.  
+**NOTE**: The function `libxsmm_free` must be used to deallocate buffers allocated by LIBXSMM's allocation functions.
+
+```C
+void* libxsmm_malloc(size_t size);
+void* libxsmm_aligned_malloc(size_t size, size_t alignment);
+void* libxsmm_aligned_scratch(size_t size, size_t alignment);
+void libxsmm_free(const volatile void* memory);
+int libxsmm_get_malloc_info(const void* m, libxsmm_malloc_info* i);
+int libxsmm_get_scratch_info(libxsmm_scratch_info* info);
+```
+
+The library exposes two memory allocation domains: (1)&#160;default memory allocation, and (2)&#160;scratch memory allocation. There are similar service functions for both domains that allow to customize the allocation and deallocation function. The "context form" even supports a user-defined "object", which may represent an allocator or any other external facility. To set the allocator of the default domain is analogous to setting the allocator of the scratch memory domain (shown below).
+
+```C
+int libxsmm_set_scratch_allocator(void* context,
+  libxsmm_malloc_function malloc_fn, libxsmm_free_function free_fn);
+int libxsmm_get_scratch_allocator(void** context,
+  libxsmm_malloc_function* malloc_fn, libxsmm_free_function* free_fn);
+```
+
+The scratch memory allocation is very effective and delivers a decent speedup over subsequent regular memory allocations. In contrast to the default allocator, a watermark for repeatedly allocated and deallocated buffers is established. The scratch memory domain is (arbitrarily) limited to 4&#160;GB of memory which can be adjusted to a different number of Bytes (available per [libxsmm_malloc.h](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_malloc.h), and also per environment variable LIBXSMM_SCRATCH_LIMIT with optional "k|K", "m|M", "g|G" units, unlimited per "-1").
+
+```C
+void libxsmm_set_scratch_limit(size_t nbytes);
+size_t libxsmm_get_scratch_limit(void);
+```
+
+By establishing a pool of "temporary" memory, the cost of repeated allocation and deallocation cycles is avoided when the watermark is reached. The scratch memory is scope-oriented with a limited number of pools for buffers of different life-time or held for different threads. The [verbose mode](index.md#verbose-mode) with a verbosity level of at least two (LIBXSMM_VERBOSE=2) shows some statistics about the populated scratch memory.
+
+```bash
+Scratch: 173 MB (mallocs=5, pools=1)
+```
+
+To improve thread-scalability and to avoid frequent memory allocation/deallocation, the scratch memory allocator can be leveraged by [intercepting existing malloc/free calls](libxsmm_tune.md#intercepted-allocations).
+
+**NOTE**: be careful with scratch memory as it only grows during execution (in between `libxsmm_init` and `libxsmm_finalize` unless `libxsmm_release_scratch` is called). This is true even when `libxsmm_free` is (and should be) used!
+
+### Meta Image File I/O
+
+Loading and storing data (I/O) is normally out of LIBXSMM's scope. However, comparing results (correctness) or writing files for visual inspection is clearly desired. This is particularly useful for the DNN domain. The MHD library domain provides support for the Meta Image File format (MHD). Tools such as [ITK-SNAP](http://itksnap.org/) or [ParaView](https://www.paraview.org/) can be used to inspect, compare, and modify images (even beyond two-dimensional images).
+
+Writing an image is per `libxsmm_mhd_write`, and loading an image is split in two stages: (1)&#160;`libxsmm_mhd_read_header`, and (2)&#160;`libxsmm_mhd_read`. The first step allows to allocate a properly sized buffer, which is then used to obtain the data per `libxsmm_mhd_read`. When reading data, an on-the-fly type conversion is supported. Further, data that is already in memory can be compared against file-data without allocating memory or reading this file into memory.
+
+To load an image from a familiar format (JPG, PNG, etc.), one may save the raw data using for instance [IrfanView](http://www.irfanview.com/) and rely on a "header-only" MHD-file (plain text). This may look like:
+
+```ini
+NDims = 2
+DimSize = 202 134
+ElementType = MET_UCHAR
+ElementNumberOfChannels = 1
+ElementDataFile = mhd_image.raw
+```
+
+In the above case, a single channel (gray-scale) 202x134-image is described with pixel data stored separately (`mhd_image.raw`). Multi-channel images are expected to interleave the pixel data. The pixel type is per `libxsmm_mhd_elemtype` ([libxsmm_mhd.h](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_mhd.h#L38)).
+
+### Thread Synchronization
+
+LIBXSMM comes with a number of light-weight abstraction layers (macro and API-based), which are distinct from the internal API (include files in [src](https://github.com/hfp/libxsmm/tree/master/src) directory) and that are exposed for general use (and hence part of the [include](https://github.com/hfp/libxsmm/tree/master/include) directory).
+
+The synchronization layer is mainly based on macros: LIBXSMM_LOCK_\* provide spin-locks, mutexes, and reader-writer locks (LIBXSMM_LOCK_SPINLOCK, LIBXSMM_LOCK_MUTEX, and LIBXSMM_LOCK_RWLOCK respectively). Usually the spin-lock is also named LIBXSMM_LOCK_DEFAULT. The implementation is intentionally based on OS-native primitives unless LIBXSMM is reconfigured (per LIBXSMM_LOCK_SYSTEM) or built using `make OMP=1` (using OpenMP inside of the library is not recommended). The life-cycle of a lock looks like:
+
+```C
+/* attribute variable and lock variable */
+LIBXSMM_LOCK_ATTR_TYPE(LIBXSMM_LOCK_DEFAULT) attr;
+LIBXSMM_LOCK_TYPE(LIBXSMM_LOCK_DEFAULT) lock;
+/* attribute initialization */
+LIBXSMM_LOCK_ATTR_INIT(LIBXSMM_LOCK_DEFAULT, &attr);
+/* lock initialization per initialized attribute */
+LIBXSMM_LOCK_INIT(LIBXSMM_LOCK_DEFAULT, &lock, &attr);
+/* the attribute can be destroyed */
+LIBXSMM_LOCK_ATTR_DESTROY(LIBXSMM_LOCK_DEFAULT, &attr);
+/* lock destruction (usage: see below/next code block) */
+LIBXSMM_LOCK_DESTROY(LIBXSMM_LOCK_DEFAULT, &lock);
+```
+
+Once the lock is initialized (or an array of locks), it can be exclusively locked or try-locked, and released at the end of the locked section (LIBXSMM_LOCK_ACQUIRE, LIBXSMM_LOCK_TRYLOCK, and LIBXSMM_LOCK_RELEASE respectively):
+
+```C
+LIBXSMM_LOCK_ACQUIRE(LIBXSMM_LOCK_DEFAULT, &lock);
+/* locked code section */
+LIBXSMM_LOCK_RELEASE(LIBXSMM_LOCK_DEFAULT, &lock);
+```
+
+If the lock-kind is LIBXSMM_LOCK_RWLOCK, non-exclusive a.k.a. shared locking allows to permit multiple readers (LIBXSMM_LOCK_ACQREAD, LIBXSMM_LOCK_TRYREAD, and LIBXSMM_LOCK_RELREAD) if the lock is not acquired exclusively (see above). An attempt to only read-lock anything else but an RW-lock is an exclusive lock (see above).
+
+```C
+if (LIBXSMM_LOCK_ACQUIRED(LIBXSMM_LOCK_RWLOCK) ==
+    LIBXSMM_LOCK_TRYREAD(LIBXSMM_LOCK_RWLOCK, &rwlock))
+{ /* locked code section */
+  LIBXSMM_LOCK_RELREAD(LIBXSMM_LOCK_RWLOCK, &rwlock);
+}
+```
+
+Locking different sections for read (LIBXSMM_LOCK_ACQREAD, LIBXSMM_LOCK_RELREAD) and write (LIBXSMM_LOCK_ACQUIRE, LIBXSMM_LOCK_RELEASE) may look like:
+
+```C
+LIBXSMM_LOCK_ACQREAD(LIBXSMM_LOCK_RWLOCK, &rwlock);
+/* locked code section: only reads are performed */
+LIBXSMM_LOCK_RELREAD(LIBXSMM_LOCK_RWLOCK, &rwlock);
+
+LIBXSMM_LOCK_ACQUIRE(LIBXSMM_LOCK_RWLOCK, &rwlock);
+/* locked code section: exclusive write (no R/W) */
+LIBXSMM_LOCK_RELEASE(LIBXSMM_LOCK_RWLOCK, &rwlock);
+```
+
+For a lock not backed by an OS level primitive (fully featured lock), the synchronization layer also provides a simple lock based on atomic operations:
+
+```C
+static union { char pad[LIBXSMM_CACHELINE]; volatile LIBXSMM_ATOMIC_LOCKTYPE state; } lock;
+LIBXSMM_ATOMIC_ACQUIRE(&lock.state, LIBXSMM_SYNC_NPAUSE, LIBXSMM_ATOMIC_RELAXED);
+/* locked code section */
+LIBXSMM_ATOMIC_RELEASE(&lock.state, LIBXSMM_ATOMIC_RELAXED);
+```
+
+In addition to the LIBXSMM_LOCK_\* macros or LIBXSMM_ATOMIC_LOCKTYPE, API-based lock primitives are also available (libxsmm_mutex_\*, and libxsmm_rwlock_\*). However, the underlying implementation of the latter is experimental.
+
+\n[end of documentation/libxsmm_aux.md]\n[start of documentation/gxm.md]\ndocumentation/gxm.md
+# Deep Learning with GxM
+
+## Compiling and Building GxM
+
+1. Install Pre-requisite Libraries: Google logging module (glog), gflags, Google's data interchange format (Protobuf), OpenCV, LMDB
+2. In Makefile.config, set GXM_LIBRARY_PATH variable to the path containing above libraries
+3. In Makefile.config, set LIBXSMM_PATH variable to the path containing LIBXSMM library
+4. Set/clear other flags in Makefile.config as required (see associated comments in Makefile.config)
+5. source setup_env.sh
+6. make clean; make
+
+## Running GxM
+
+The network topology definitions directory is "model_zoo". Currently, it contains definitions for
+AlexNet (without LRN), ResNet-50, Inception v3 along with CIFAR10 and MNIST as simple test definitions.
+Each topology definition is in a .prototxt file. ResNet-50 can run with "dummy data", raw JPEG image data
+or with LMDB. Filenames indicate the data source along with the minibatch size. Inception v3 runs only with
+compressed LMDB data.
+
+The hyperparameter definitions for each topology are also in the corresponding directory under "model_zoo" in
+a .prototxt file with the suffix "solver". For a single-node, this file is called solver.prototxt. For multi-node
+the filename also contains the global minibatch size (=single node minibatch size x number of nodes);, e.g., solver_896.prototxt contains hyperparameters for MB=56 per node and 16 nodes. The "solver*" file also contains a
+flag that specifies whether to start execution from a checkpoint (and thus read load weights from the "./weights"
+directory) or from scratch; by default execution starts from scratch.
+
+Optimal parallelization of Convolutional layers in LIBXSMM happens when the number of OpenMP threads = MiniBatch.
+Therefore, on Xeon
+
+```bash
+export OMP_NUM_THREADS=<MiniBatch>
+export KMP_AFFINITY=compact,granularity=fine,1,0
+```
+
+The command line for a training run is:
+
+```bash
+./build/bin/gxm train <topology filename> <hyperparameter filename>
+```
+
+For example:
+
+```bash
+./build/bin/gxm train model_zoo/resnet/1_resnet50_dummy_56.prototxt model_zoo/resnet/solver.prototxt
+```
+
+## Preping on RHEL 8.0 / CentOS 8.0
+
+```bash
+dnf install protobuf
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/protobuf-compiler-3.5.0-7.el8.x86_64.rpm
+dnf install protobuf-compiler-3.5.0-7.el8.x86_64.rpm
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/protobuf-devel-3.5.0-7.el8.x86_64.rpm
+dnf install protobuf-devel-3.5.0-7.el8.x86_64.rpm
+dnf install lmdb
+dnf install lmdb-devel
+wget http://repo.okay.com.mx/centos/8/x86_64/release/opencv-devel-3.4.1-9.el8.x86_64.rpm
+wget http://repo.okay.com.mx/centos/8/x86_64/release/opencv-3.4.1-9.el8.x86_64.rpm
+dnf install opencv-3.4.1-9.el8.x86_64.rpm
+dnf install opencv-devel-3.4.1-9.el8.x86_64.rpm
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/gflags-2.1.2-6.el8.x86_64.rpm
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/gflags-devel-2.1.2-6.el8.x86_64.rpm
+dnf install gflags-2.1.2-6.el8.x86_64.rpm
+dnf install gflags-devel-2.1.2-6.el8.x86_64.rpm
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/glog-devel-0.3.5-3.el8.x86_64.rpm
+wget http://mirror.centos.org/centos/8/PowerTools/x86_64/os/Packages/glog-0.3.5-3.el8.x86_64.rpm
+dnf install glog-0.3.5-3.el8.x86_64.rpm
+dnf install glog-devel-0.3.5-3.el8.x86_64.rpm
+```
+
+Make sure that the makefile follows the OpenCV Ver 3 path!
+
+\n[end of documentation/gxm.md]\n[start of documentation/libxsmm_tune.md]\ndocumentation/libxsmm_tune.md
+## Customization
+
+### Intercepted Allocations<a name="scalable_malloc"></a>
+
+To improve thread-scalability and to avoid frequent memory allocation/deallocation, the [scratch memory allocator](libxsmm_aux.md#memory-allocation) can be leveraged by intercepting existing malloc/free calls. This facility is built into LIBXSMM's main library, but disabled at compile-time (by default); build with `make MALLOC=1` to permanently enable, or build with `make MALLOC=-1` to even require an environment variable `LIBXSMM_MALLOC=1` or an API-call (`libxsmm_set_malloc`). Both runtime settings allow an optional lower and/or an upper bound to select malloc-calls based on the size of the allocation. For the environment option, an extra variable is introduced, e.g., use `LIBXSMM_MALLOC=1 LIBXSMM_MALLOC_LIMIT=4m:1g`.
+
+```C
+void libxsmm_set_malloc(int enabled, const size_t* lo, const size_t* hi);
+int libxsmm_get_malloc(size_t* lo, size_t* hi);
+```
+
+Querying the status may return zero even if there was an attempt to enable this facility (limitation/experimental implementation). Please note, the regular [Scratch Memory API](libxsmm_aux.md#memory-allocation) (e.g., `libxsmm_[get|set]_scratch_limit`) and the related environment variables can apply as well (`LIBXSMM_SCRATCH_LIMIT`, `LIBXSMM_SCRATCH_POOLS`, `LIBXSMM_SCRATCH_SCALE`). If intercepted memory allocations are enabled, the scratch limit is adjusted by default to allow unlimited growth of the scratch domain. Further, an increased verbosity level can help to gain some insight (`LIBXSMM_VERBOSE=3`).
+
+Intercepting malloc/free is supported by linking LIBXSMM's static or shared main library. The latter of which can be used to intercept calls of an existing and unchanged binary (LD_PRELOAD mechanism). To statically link with LIBXSMM and to intercept existing malloc/free calls, the following changes to the application's link stage are recommended:
+
+```bash
+gcc [...] -Wl,--export-dynamic \
+  -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
+  -Wl,--wrap=memalign,--wrap=free \
+  /path/to/libxsmm.a
+```
+
+The main library causes a BLAS-dependency which may be already fulfilled for the application in question. However, if this is not the case (unresolved symbols), `libxsmmnoblas.a` must be linked in addition. Depending on the dependencies of the application, the link order may also need to be adjusted. Other i.e. a GNU-compatible compiler (as shown above), can induce additional requirements (compiler runtime libraries).
+
+**NOTE**: The Intel Compiler may need "libirc", i.e., `-lirc` in front of `libxsmm.a`. Linking LIBXSMM's static library may require above mentioned linker flags (`--wrap`) in particular when using Intel Fortran (IFORT) as a linker driver unless `CALL libxsmm_init()` is issued (or at least one symbol of LIBXSMM's main library is referenced; check with `nm application | grep libxsmm`). Linking the static library by using the GNU compiler does not strictly need special flags when linking the application.
+
+Linking the shared library form of LIBXSMM (`make STATIC=0`) has similar requirements with respect to the application but does not require `-Wl,--wrap` although `-Wl,--export-dynamic` is necessary if the application is statically linked (beside of LIBXSMM linked in a shared fashion). The LD_PRELOAD based mechanism does not need any changes to the link step of an application. However, `libxsmmnoblas` may be required if the application does not already link against BLAS.
+
+```bash
+LD_PRELOAD="libxsmm.so libxsmmnoblas.so"
+LD_LIBRARY_PATH=/path/to/libxsmm/lib:${LD_LIBRARY_PATH}
+LIBXSMM_MALLOC=1
+```
+
+**NOTE**: If the application already uses BLAS, of course `libxsmmnoblas` must not be used!
+
+The following code can be compiled and linked with `gfortran example.f -o example`:
+
+```fortran
+      PROGRAM allocate_test
+        DOUBLE PRECISION, ALLOCATABLE :: a(:), b(:), c(:)
+        INTEGER :: i, repeat = 100000
+        DOUBLE PRECISION :: t0, t1, d
+
+        ALLOCATE(b(16*1024))
+        ALLOCATE(c(16*1024))
+        CALL CPU_TIME(t0)
+        DO i = 1, repeat
+          ALLOCATE(a(16*1024*1024))
+          DEALLOCATE(a)
+        END DO
+        CALL CPU_TIME(t1)
+        DEALLOCATE(b)
+        DEALLOCATE(c)
+        d = t1 - t0
+
+        WRITE(*, "(A,F10.1,A)") "duration:", (1D3 * d), " ms"
+      END PROGRAM
+```
+
+Running with `LIBXSMM_VERBOSE=3 LIBXSMM_MALLOC=1 LD_PRELOAD=... LD_LIBRARY_PATH=... ./example` displays: `Scratch: 132 MB (mallocs=1, pools=1)` which shows the innermost allocation/deallocation was served by the scratch memory allocator.
+
+### Static Specialization
+
+By default, LIBXSMM uses the [JIT backend](index.md#jit-backend) which is automatically building optimized code (JIT=1). Matrix multiplication kernels can be also statically specialized at compile-time of the library (M, N, and K values). This mechanism also extends the interface of the library because function prototypes are included into both the C and FORTRAN interface.
+
+```bash
+make M="2 4" N="1" K="$(echo $(seq 2 5))"
+```
+
+The above example is generating the following set of (M,N,K) triplets:
+
+```bash
+(2,1,2), (2,1,3), (2,1,4), (2,1,5),
+(4,1,2), (4,1,3), (4,1,4), (4,1,5)
+```
+
+The index sets are in a loop-nest relationship (M(N(K))) when generating the indexes. Moreover, an empty index set resolves to the next non-empty outer index set of the loop nest (including to wrap around from the M to K set). An empty index set does not participate in the loop-nest relationship. Here is an example of generating multiplication routines which are "squares" with respect to M and N (N inherits the current value of the "M loop"):
+
+```bash
+make M="$(echo $(seq 2 5))" K="$(echo $(seq 2 5))"
+```
+
+An even more flexible specialization is possible by using the MNK variable when building the library. It takes a list of indexes which are eventually grouped (using commas):
+
+```bash
+make MNK="2 3, 23"
+```
+
+Each group of the above indexes is combined into all possible triplets generating the following set of (M,N,K) values:
+
+```bash
+(2,2,2), (2,2,3), (2,3,2), (2,3,3),
+(3,2,2), (3,2,3), (3,3,2), (3,3,3), (23,23,23)
+```
+
+Of course, both mechanisms (M/N/K and MNK based) can be combined by using the same command line (make). Static optimization and JIT can also be combined (no need to turn off the JIT backend).
+
+### User-Data Dispatch
+
+It can be desired to dispatch user-defined data, i.e., to query a value based on a key. This functionality can be used to, e.g., dispatch multiple kernels in one step if a code location relies on multiple kernels. This way, one can pay the cost of dispatch one time per task rather than according to the number of JIT-kernels used by this task. This functionality is detailed in the section about [Service Functions](libxsmm_aux.md#user-data-dispatch).
+
+### Targeted Compilation<a name="tuning"></a>
+
+Specifying a code path is not necessary if the JIT backend is not disabled. However, disabling JIT compilation, statically generating a collection of kernels, and targeting a specific instruction set extension for the entire library looks like:
+
+```bash
+make JIT=0 AVX=3 MNK="1 2 3 4 5"
+```
+
+The above example builds a library which cannot be deployed to anything else but the Intel&#160;Knights&#160;Landing processor family&#160;("KNL") or future Intel&#160;Xeon processors supporting foundational Intel&#160;AVX&#8209;512 instructions (AVX&#8209;512F). The latter might be even more adjusted by supplying MIC=1 (along with AVX=3), however this does not matter since critical code is in inline assembly (and not affected). Similarly, SSE=0 (or JIT=0 without SSE or AVX build flag) employs an "arch-native" approach whereas AVX=1, AVX=2 (with FMA), and AVX=3 are specifically selecting the kind of Intel&#160;AVX code. Moreover, controlling the target flags manually or adjusting the code optimizations is also possible. The following example is GCC-specific and corresponds to OPT=3, AVX=3, and MIC=1:
+
+```bash
+make OPT=3 TARGET="-mavx512f -mavx512cd -mavx512er -mavx512pf"
+```
+
+An extended interface can be generated which allows to perform software prefetches. Prefetching data might be helpful when processing batches of matrix multiplications where the next operands are farther away or otherwise unpredictable in their memory location. The prefetch strategy can be specified similar as shown in the section [Generator Driver](libxsmm_be.md#generator-driver), i.e., by either using the number of the shown enumeration, or by exactly using the name of the prefetch strategy. The only exception is PREFETCH=1 which is automatically selecting a strategy per an internal table (navigated by CPUID flags). The following example is requesting the "AL2jpst" strategy:
+
+```bash
+make PREFETCH=8
+```
+
+The prefetch interface is extending the signature of all kernels by three arguments (pa, pb, and pc). These additional arguments are specifying the locations of the operands of the next multiplication (the next a, b, and c matrices). Providing unnecessary arguments in case of the three-argument kernels is not big a problem (beside of some additional call-overhead), however running a 3-argument kernel with more than three arguments and thereby picking up garbage data is misleading or disabling the hardware prefetcher (due to software prefetches). In this case, a misleading prefetch location is given plus an eventual page fault due to an out-of-bounds (garbage-)location.
+
+Further, a generated configuration ([template](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_config.h)) of the library encodes the parameters for which the library was built for (static information). This helps optimizing client code related to the library's functionality. For example, the LIBXSMM_MAX_\* and LIBXSMM_AVG_\* information can be used with the LIBXSMM_PRAGMA_LOOP_COUNT macro to hint loop trip counts when handling matrices related to the problem domain of LIBXSMM.
+
+### Auto-dispatch
+
+The function `libxsmm_?mmdispatch` helps amortizing the cost of the dispatch when multiple calls with the same M, N, and K are needed. The automatic code dispatch is orchestrating two levels:
+
+1. Specialized routine (implemented in assembly code),
+2. BLAS library call (fallback).
+
+Both levels are accessible directly, which allows to customize the code dispatch. The fallback level may be supplied by the Intel&#160;Math&#160;Kernel&#160;Library&#160;(Intel&#160;MKL)&#160;11.2 DIRECT CALL feature.
+
+Further, a preprocessor symbol denotes the largest problem-size (*M* x *N* x *K*) that belongs to the first level, and therefore determines if a matrix multiplication falls back to BLAS. The problem-size threshold can be configured by using for example:
+
+```bash
+make THRESHOLD=$((60 * 60 * 60))
+```
+
+The maximum of the given threshold and the largest requested specialization refines the value of the threshold. Please note that explicitly JIT'ting and executing a kernel is possible and independent of the threshold. If a problem-size is below the threshold, dispatching the code requires to figure out whether a specialized routine exists or not.
+
+For statically generated code, the precision can be selected:
+
+```bash
+make PRECISION=2
+```
+
+The default preference is to generate and register both single and double-precision code (PRECISION=0). Specifying PRECISION=1&#124;2 is generating and registering single-precision or double-precision code respectively.
+
+The automatic dispatch is highly convenient because existing GEMM calls can serve specialized kernels (even in a binary compatible fashion), however there is (and always will be) an overhead associated with looking up the code-registry and checking whether the code determined by the GEMM call is already JIT'ted or not. This lookup has been optimized with various techniques such as specialized CPU instructions to calculate CRC32 checksums, to avoid costly synchronization (needed for thread-safety) until it is ultimately known that the requested kernel is not yet JIT'ted, and by implementing a small thread-local cache of recently dispatched kernels. The latter of which can be adjusted in size (only power-of-two sizes) but also disabled:
+
+```bash
+make CACHE=0
+```
+
+Please note that measuring the relative cost of automatically dispatching a requested kernel depends on the kernel size (obviously smaller matrices are multiplied faster on an absolute basis), however smaller matrix multiplications are bottlenecked by memory bandwidth rather than arithmetic intensity. The latter implies the highest relative overhead when (artificially) benchmarking the very same multiplication out of the CPU-cache.
+
+\n[end of documentation/libxsmm_tune.md]\n[start of documentation/libxsmm_mm.md]\ndocumentation/libxsmm_mm.md
+## Matrix Multiplication
+
+### Overview<a name="small-matrix-multiplication-smm"></a>
+
+To perform the dense matrix-matrix multiplication *C<sub>m&#8239;x&#8239;n</sub> = alpha &middot; A<sub>m&#8239;x&#8239;k</sub> &middot; B<sub>k&#8239;x&#8239;n</sub> + beta &middot; C<sub>m&#8239;x&#8239;n</sub>*, the full-blown GEMM interface can be treated with "default arguments" (which is deviating from the BLAS standard, however without compromising the binary compatibility). Default arguments are derived from compile-time constants (configurable) for historic reasons (LIBXSMM's "pre-JIT era").
+
+```C
+libxsmm_?gemm(NULL/*transa*/, NULL/*transb*/,
+  &m/*required*/, &n/*required*/, &k/*required*/,
+  NULL/*alpha*/, a/*required*/, NULL/*lda*/,
+                 b/*required*/, NULL/*ldb*/,
+   NULL/*beta*/, c/*required*/, NULL/*ldc*/);
+```
+
+For the C interface (with type prefix 's' or 'd'), all arguments including m, n, and k are passed by pointer. This is needed for binary compatibility with the original GEMM/BLAS interface.
+
+```C
+libxsmm_gemm(NULL/*transa*/, NULL/*transb*/,
+  m/*required*/, n/*required*/, k/*required*/,
+  NULL/*alpha*/, a/*required*/, NULL/*lda*/,
+                 b/*required*/, NULL/*ldb*/,
+   NULL/*beta*/, c/*required*/, NULL/*ldc*/);
+```
+
+The C++ interface is also supplying overloaded versions where m, n, and k can be passed by&#8209;value (making it clearer that m, n, and k are non-optional arguments).
+
+```FORTRAN
+! Dense matrix multiplication (single/double-precision).
+CALL libxsmm_?gemm(m=m, n=n, k=k, a=a, b=b, c=c)
+! Dense matrix multiplication (generic interface).
+CALL libxsmm_gemm(m=m, n=n, k=k, a=a, b=b, c=c)
+```
+
+The FORTRAN interface supports optional arguments (without affecting the binary compatibility with the original BLAS interface) by allowing to omit arguments where the C/C++ interface allows for NULL to be passed.
+
+```C
+/** Dense matrix multiplication (single/double-precision). */
+libxsmm_blas_?gemm(NULL/*transa*/, NULL/*transb*/,
+  &m/*required*/, &n/*required*/, &k/*required*/,
+  NULL/*alpha*/, a/*required*/, NULL/*lda*/,
+                 b/*required*/, NULL/*ldb*/,
+   NULL/*beta*/, c/*required*/, NULL/*ldc*/);
+```
+
+For convenience, a BLAS-based dense matrix multiplication (`libxsmm_blas_gemm`) is provided for all supported languages. This only re-exposes the underlying GEMM/BLAS implementation, but the interface accepts optional arguments (or NULL-pointers in C) where the regular GEMM expects a value. To remove any BLAS-dependency, please follow the [Link Instructions](index.md#link-instructions). A BLAS-based GEMM can be useful for validation/benchmark purposes, and more important as a fallback when building an application-specific dispatch mechanism.
+
+```C
+/** OpenMP parallelized dense matrix multiplication. */
+libxsmm_?gemm_omp(&transa, &transb, &m, &n, &k,
+  &alpha, a, &lda, b, &ldb, &beta, c, &ldc);
+```
+
+A more recently added variant of matrix multiplication is parallelized based on the OpenMP standard. These routines will open an internal parallel region and rely on "classic" thread-based OpenMP. If these routines are called from inside of a parallel region, the parallelism will be based on tasks (OpenMP&#160;3.0). Please note that all OpenMP-based routines are hosted by the extension library (libxsmmext), which keeps the main library agnostic with respect to a threading runtime.
+
+### Manual Code Dispatch
+
+Successively calling a kernel (i.e., multiple times) allows for amortizing the cost of the code dispatch. Moreover, to customize the dispatch mechanism, one can rely on the following interface.
+
+```C
+/** Call dispatched (*function_ptr)(a, b, c [, pa, pb, pc]). */
+libxsmm_[s|d]mmfunction libxsmm_[type-prefix]mmdispatch(
+  libxsmm_blasint m, libxsmm_blasint n, libxsmm_blasint k,
+  /** NULL: tight fit (m) */ const libxsmm_blasint* lda,
+  /** NULL: tight fit (k) */ const libxsmm_blasint* ldb,
+  /** NULL: tight fit (m) */ const libxsmm_blasint* ldc,
+  /** NULL: LIBXSMM_ALPHA */ const type* alpha,
+  /** NULL: LIBXSMM_BETA  */ const type* beta,
+  /** NULL: LIBXSMM_FLAGS */ const int* flags,
+  /** NULL: LIBXSMM_PREFETCH_NONE (not LIBXSMM_PREFETCH!) */
+  const int* prefetch);
+```
+
+Overloaded function signatures are provided and allow to omit arguments (C++ and FORTRAN), which are then derived from the [configurable defaults](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_config.h). In C++, `libxsmm_mmfunction<type>` can be used to instantiate a functor rather than making a distinction between numeric types per type-prefix. For lower precision GEMMs, `libxsmm_mmfunction<itype,otype=itype>` optionally takes a second type (output type).
+
+```C
+/* generates or dispatches the code specialization */
+libxsmm_mmfunction<T> xmm(m, n, k);
+if (xmm) { /* JIT'ted code */
+  /* can be parallelized per, e.g., OpenMP */
+  for (int i = 0; i < n; ++i) {
+    xmm(a+i*asize, b+i*bsize, c+i*csize);
+  }
+}
+```
+
+Similarly in FORTRAN (see [samples/smm/smm.f](https://github.com/hfp/libxsmm/blob/master/samples/smm/smm.f)), a generic interface (`libxsmm_mmdispatch`) can be used to dispatch a `LIBXSMM_?MMFUNCTION`. The handle encapsulated by such a `LIBXSMM_?MMFUNCTION` can be called per `libxsmm_call`. Beside of dispatching code, one can also call statically generated kernels (e.g., `libxsmm_dmm_4_4_4`) by using the prototype functions included with the FORTRAN and C/C++ interface. Prototypes are present whenever static code was requested at compile-time of the library (e.g. per `make MNK="1 2 3 4 5"`).
+
+```FORTRAN
+TYPE(LIBXSMM_DMMFUNCTION) :: xmm
+CALL libxsmm_dispatch(xmm, m, n, k)
+IF (libxsmm_available(xmm)) THEN
+  DO i = LBOUND(c, 3), UBOUND(c, 3) ! consider OpenMP
+    CALL libxsmm_dmmcall(xmm, a(:,:,i), b(:,:,i), c(:,:,i))
+  END DO
+END IF
+```
+
+### Batched Multiplication
+
+In case of batched SMMs, it can be beneficial to supply "next locations" such that the upcoming operands are prefetched ahead of time. Such a location would be the address of the next matrix to be multiplied (and not any of the floating-point elements within the "current" matrix-operand). The "prefetch strategy" is requested at dispatch-time of a kernel. A [strategy](libxsmm_be.md#prefetch-strategy) other than `LIBXSMM_PREFETCH_NONE` turns the signature of a JIT'ted kernel into a function with six arguments (`a,b,c, pa,pb,pc` instead of `a,b,c`). To defer the decision about the strategy to a CPUID-based mechanism, one can choose `LIBXSMM_PREFETCH_AUTO`.
+
+```C
+int prefetch = LIBXSMM_PREFETCH_AUTO;
+int flags = 0; /* LIBXSMM_FLAGS */
+libxsmm_dmmfunction xmm = NULL;
+double alpha = 1, beta = 0;
+xmm = libxsmm_dmmdispatch(23/*m*/, 23/*n*/, 23/*k*/,
+  NULL/*lda*/, NULL/*ldb*/, NULL/*ldc*/,
+  &alpha, &beta, &flags, &prefetch);
+```
+
+Above, pointer-arguments of `libxsmm_dmmdispatch` can be NULL (or OPTIONAL in FORTRAN): for LDx this means a "tight" leading dimension, alpha, beta, and flags are given by a [default value](https://github.com/hfp/libxsmm/blob/master/include/libxsmm_config.h) (which is selected at compile-time), and for the prefetch strategy a NULL-argument refers to "no prefetch" (which is equivalent to an explicit `LIBXSMM_PREFETCH_NONE`). By design, the prefetch strategy can be changed at runtime (as soon as valid next-locations are used) without changing the call-site (kernel-signature with six arguments).
+
+<a name="implicit-batches"></a>
+
+```C
+if (0 < n) { /* check that n is at least 1 */
+# pragma parallel omp private(i)
+  for (i = 0; i < (n - 1); ++i) {
+    const double *const ai = a + i * asize;
+    const double *const bi = b + i * bsize;
+    double *const ci = c + i * csize;
+    xmm(ai, bi, ci, ai + asize, bi + bsize, ci + csize);
+  }
+  xmm(a + (n - 1) * asize, b + (n - 1) * bsize, c + (n - 1) * csize,
+  /* pseudo prefetch for last element of batch (avoids page fault) */
+      a + (n - 1) * asize, b + (n - 1) * bsize, c + (n - 1) * csize);
+}
+```
+
+To process a batch of matrix multiplications and to prefetch the operands of the next multiplication ahead of time, the code presented in the [Overview](#overview) section may be modified as shown above. The last multiplication is peeled from the main-batch to avoid prefetching out-of-bounds (OOB). Prefetching from an invalid address does not trap an exception, but an (unnecessary) page fault can be avoided.
+
+<a name="explicit-batch-interface"></a>
+
+```C
+/** Batched matrix multiplications (explicit data representation). */
+int libxsmm_mmbatch(libxsmm_gemm_precision iprec, libxsmm_gemm_precision oprec,
+  const char* transa, const char* transb,
+  libxsmm_blasint m, libxsmm_blasint n, libxsmm_blasint k,
+  const void* alpha, const void* a, const libxsmm_blasint* lda,
+                     const void* b, const libxsmm_blasint* ldb,
+   const void* beta,       void* c, const libxsmm_blasint* ldc,
+  libxsmm_blasint index_base, libxsmm_blasint index_stride,
+  const libxsmm_blasint stride_a[],
+  const libxsmm_blasint stride_b[],
+  const libxsmm_blasint stride_c[],
+  libxsmm_blasint batchsize,
+  int tid, int ntasks);
+```
+
+To further simplify the multiplication of matrices in a batch, LIBXSMM's batch interface can help to extract the necessary input from a variety of existing structures (integer indexes, array of pointers both with Byte sized strides). An expert interface (see above) can employ a user-defined threading runtime (`tid` and `ntasks`). In case of OpenMP, `libxsmm_mmbatch_omp` is ready-to-use and hosted by the extension library (libxsmmext). Of course, `libxsmm_mmbatch_omp` does not take `tid` and `ntasks` since both arguments are given by OpenMP. Similarly, a sequential version (shown below) is available per `libxsmm_gemm_batch` (libxsmm).
+
+Please note that an explicit data representation should exist and reused rather than created only to call the explicit batch-interface. Creating such a data structure only for this matter can introduce an overhead which is hard to amortize (speedup). If no explicit data structure exists, a "chain" of multiplications can be often algorithmically described (see [self-hosted batch loop](#implicit-batches)).
+
+```C
+void libxsmm_gemm_batch(libxsmm_gemm_precision iprec, libxsmm_gemm_precision oprec,
+  const char* transa, const char* transb,
+  libxsmm_blasint m, libxsmm_blasint n, libxsmm_blasint k,
+  const void* alpha, const void* a, const libxsmm_blasint* lda,
+                     const void* b, const libxsmm_blasint* ldb,
+   const void* beta,       void* c, const libxsmm_blasint* ldc,
+  libxsmm_blasint index_base, libxsmm_blasint index_stride,
+  const libxsmm_blasint stride_a[],
+  const libxsmm_blasint stride_b[],
+  const libxsmm_blasint stride_c[],
+  libxsmm_blasint batchsize);
+```
+
+<a name="blas-batch-interface"></a>In recent BLAS library implementations, `dgemm_batch` and `sgemm_batch` have been introduced. This BLAS(-like) interface allows for groups of homogeneous batches, which is like an additional loop around the interface as introduced above. On the other hand, the BLAS(-like) interface only supports arrays of pointers for the matrices. In contrast, above interface supports arrays of pointers as well as arrays of indexes plus a flexible way to extract data from arrays of structures (AoS). LIBXSMM also supports this (new) BLAS(-like) interface with `libxsmm_?gemm_batch` and `libxsmm_?gemm_batch_omp` (the latter of which relies on LIBXSMM/ext). Further, existing calls to `dgemm_batch` and `sgemm_batch` can be intercepted and replaced with [LIBXSMM's call wrapper](#call-wrapper). The signatures of `libxsmm_dgemm_batch` and `libxsmm_sgemm_batch` are equal except for the element type (`double` and `float` respectively).
+
+```C
+void libxsmm_dgemm_batch(const char transa_array[], const char transb_array[],
+  const libxsmm_blasint m_array[], const libxsmm_blasint n_array[], const libxsmm_blasint k_array[],
+  const double alpha_array[], const double* a_array[], const libxsmm_blasint lda_array[],
+                              const double* b_array[], const libxsmm_blasint ldb_array[],
+  const double  beta_array[],       double* c_array[], const libxsmm_blasint ldc_array[],
+  const libxsmm_blasint* group_count, const libxsmm_blasint group_size[]);
+```
+
+<a name="batch-sync"></a>**NOTE**: the multi-threaded implementation (`ntasks > 1` or "omp" form of the functions) avoids data races if indexes or pointers for the destination (C-)matrix are duplicated. This synchronization occurs automatically (`beta != 0`), but can be avoided by passing a negative `batchsize`, `group_size` and/or a negative `group_count`.
+
+### User-Data Dispatch
+
+It can be desired to dispatch user-defined data, i.e., to query a value based on a key. This functionality can be used to, e.g., dispatch multiple kernels in one step if a code location relies on multiple kernels. This way, one can pay the cost of dispatch one time per task rather than according to the number of JIT-kernels used by this task. This functionality is detailed in the section about [Service Functions](libxsmm_aux.md#user-data-dispatch).
+
+### Call Wrapper
+
+#### Overview
+
+Since the library is binary compatible with existing GEMM calls (BLAS), such calls can be replaced at link-time or intercepted at runtime of an application such that LIBXSMM is used instead of the original BLAS library. There are two cases to consider: (1)&#160;static linkage, and (2)&#160;dynamic linkage of the application against the original BLAS library. When calls are intercepted, one can select a sequential (default) or an OpenMP-parallelized implementation (`make WRAP=2`).
+
+```bash
+LIBXSMM STATISTIC: 1000 multiplications
+dgemm(trans=NN mnk=32,32,21 ldx=32,21,32 a,b=1,0): 8% [main$omp$1]
+dgemm(trans=NN mnk=32,21,32 ldx=32,32,32 a,b=1,0): 8% [main$omp$1]
+dgemm(trans=NN mnk=10,21,32 ldx=10,32,10 a,b=1,0): 5% [main$omp$1]
+dgemm(trans=NN mnk=32,10,32 ldx=32,32,32 a,b=1,0): 5% [main$omp$1]
+dgemm(trans=NN mnk=32,32,10 ldx=32,10,32 a,b=1,0): 5% [main$omp$1]
+```
+
+Intercepted GEMMs can also build a sophisticated statistic (histogram) with LIBXSMM_VERBOSE=4 (or higher). The histogram displays the call sites (debug symbol name) of all intercepted GEMMs ([example](https://github.com/hfp/libxsmm/blob/master/samples/utilities/wrap/autobatch.c) above depicts an OpenMP region hosted by the main function). With level&#160;5 (or higher), the histogram yields the entire content, and eventually less relevant entries are not pruned. An application must be built with symbols (`-g`) and export symbols similar to shared libraries (`-Wl,--export-dynamic` even when linked statically) in order to display the symbol names of where the GEMMs originated (call site).
+
+**NOTE**: Intercepting GEMM calls is low effort but implies overhead, which can be relatively high for small-sized problems. LIBXSMM's native programming interface has lower overhead and allows to amortize this overhead when using the same multiplication kernel in a consecutive fashion along with sophisticated data prefetch.
+
+#### Static Linkage
+
+An application which is linked statically against BLAS requires to wrap the 'sgemm_' and the 'dgemm_' symbol (an alternative is to wrap only 'dgemm_'). To relink the application (without editing the build system) can often be accomplished by copying and pasting the linker command as it appeared in the console output of the build system, and then re-invoking a modified link step (please also consider `-Wl,--export-dynamic`).
+
+```bash
+gcc [...] -Wl,--wrap=dgemm_,--wrap=sgemm_ \
+          /path/to/libxsmmext.a /path/to/libxsmm.a \
+          /path/to/your_regular_blas.a
+```
+
+In addition, existing [BLAS(-like) batch-calls](#blas-batch-interface) can be intercepted as well:
+
+```bash
+gcc [...] -Wl,--wrap=dgemm_batch_,--wrap=sgemm_batch_ \
+          -Wl,--wrap=dgemm_batch,--wrap=sgemm_batch \
+          -Wl,--wrap=dgemm_,--wrap=sgemm_ \
+          /path/to/libxsmmext.a /path/to/libxsmm.a \
+          /path/to/your_regular_blas.a
+```
+
+Above, GEMM and GEMM_BATCH are intercepted both, however this can be chosen independently. For GEMM_BATCH the Fortran and C-form of the symbol may be intercepted both (regular GEMM can always be intercepted per `?gemm_` even when `?gemm` is used in C-code).
+
+**NOTE**: The static link-time wrapper technique may only work with a GCC tool chain (GNU&#160;Binutils: `ld`, or `ld` via compiler-driver), and it has been tested with GNU&#160;GCC, Intel&#160;Compiler, and Clang. However, this does not work under Microsoft Windows (even when using the GNU tool chain or Cygwin).
+
+#### Dynamic Linkage
+
+An application that is dynamically linked against BLAS allows to intercept the GEMM calls at startup time (runtime) of the unmodified executable by using the LD_PRELOAD mechanism. The shared library of LIBXSMMext (`make STATIC=0`) can be used to intercept GEMM calls:
+
+```bash
+LD_LIBRARY_PATH=/path/to/libxsmm/lib:${LD_LIBRARY_PATH} \
+LD_PRELOAD=libxsmmext.so \
+   ./myapplication
+```
+
+\n[end of documentation/libxsmm_mm.md]
+</code>
+
+Please generate test cases that check whether an implemented solution
+resolves the issue of the user (at the top, within <issue/> brackets).
+Present the test cases as a diff (custom format, explained below).
+
+The general format of a diff is as follows.
+```custom-diff
+diff
+<path/filename>
+< "rewrite" or "insert" >
+< rough line number / EOF / BOF >
+< insert function that should be added or rewritten >
+end diff
+< repeat blocks of diff as necessary >
+```
+
+Insertion can only be done at the end or beginning of the file, indicated by EOF or BOF respectively.
+
+As an example for a diff, consider the following two versions of the same file, once before and after a change.
+The original version of the file was as follows.
+[start of demo/test_file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6
+7 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+8 def test_gcd(a, b):
+9     assert gcd(a, b) == expected
+10
+[end of demo/file.py]
+
+The diff for fix in function euclidean and adds the function gcd is as follows.
+This diff changes the first file into the second file.
+```custom-diff
+diff
+demo/file.py
+rewrite
+1
+def test_euclidean(a, b):
+    assert euclidean(0, 0) == 0
+    assert euclidean(0, 1) == 1
+    assert euclidean(1, 0) == 1
+    assert euclidean(1, 1) == 1
+    assert euclidean(100, 10) == 10
+end diff
+diff
+demo/file.py
+insert
+EOF
+@ pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+def test_lcm(a, b):
+    assert lcm(a, b) == expected
+end diff
+```
+
+The new version of the file is as follows.
+[start of demo/file.py]
+1 def test_euclidean(a, b):
+2     assert euclidean(0, 0) == 0
+3     assert euclidean(0, 1) == 1
+4     assert euclidean(1, 0) == 1
+5     assert euclidean(1, 1) == 1
+6     assert euclidean(100, 10) == 10
+7
+8 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1)])
+9 def test_gcd(a, b):
+10     assert gcd(a, b) == expected
+11
+12 @pytest.mark.parametrize("a, b, expected", [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 1), (100, 10, 10)])
+13 def test_lcm(a, b):
+14     assert lcm(a, b) == expected
+15
+[end of demo/file.py]
+
+As you can see, you need to indicate the approximate line numbers, function name and the path and file name you want to change,
+but there can be as many independent blocks of changes as you need. You may also apply changes to several files.
+Apply as much reasoning as you please and see necessary. The format of the solution is fixed and has to follow the custom diff format.
+Make sure to implement only test cases and don't try to fix the issue itself.
